@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>r34-dl</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #14161a;
+    --panel: #1c1f25;
+    --border: #2c313a;
+    --text: #e6e8eb;
+    --muted: #8b93a1;
+    --accent: #5b8def;
+    --danger: #e0607a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 2.5rem 1rem;
+  }
+  main { width: 100%; max-width: 720px; }
+  h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+  p.subtitle { color: var(--muted); margin-top: 0; margin-bottom: 1.5rem; }
+  form {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  input[type="text"], input[type="password"] {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 0.6rem 0.75rem;
+    font-size: 1rem;
+    width: 100%;
+  }
+  label.field { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.85rem; color: var(--muted); }
+  .options { display: flex; gap: 1.25rem; flex-wrap: wrap; color: var(--muted); font-size: 0.9rem; }
+  .options label { display: flex; align-items: center; gap: 0.4rem; }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 0.65rem 1rem;
+    font-size: 1rem;
+    cursor: pointer;
+  }
+  button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .folder-row { display: flex; align-items: center; gap: 0.75rem; color: var(--muted); font-size: 0.85rem; }
+  .folder-row span { flex: 1; overflow-wrap: anywhere; }
+  #status {
+    margin-top: 1.25rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+    min-height: 1.2em;
+  }
+  #setup-error { color: var(--danger); font-size: 0.85rem; min-height: 1.2em; }
+  #progress-track {
+    margin-top: 0.5rem;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  #progress-track:not(.visible) { display: none; }
+  #progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    transition: width 0.3s ease;
+  }
+  #progress-fill.indeterminate {
+    width: 30% !important;
+    animation: indeterminate 1.2s infinite ease-in-out;
+  }
+  @keyframes indeterminate {
+    0% { margin-left: 0%; }
+    100% { margin-left: 70%; }
+  }
+  #failures { color: var(--danger); font-size: 0.8rem; margin: 0.5rem 0 0; padding-left: 1.1rem; }
+  #failures:empty { display: none; }
+  #preview {
+    margin-top: 1rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 8px;
+  }
+  #preview img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+  }
+  footer { margin-top: 1rem; font-size: 0.8rem; color: var(--muted); }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>r34-dl</h1>
+  <p class="subtitle">Fetch images, videos, and metadata by tag from rule34.xxx's public API.</p>
+
+  <section id="setup-view" hidden>
+    <form id="setup-form">
+      <label class="field">
+        API credentials
+        <input type="text" id="credentialsPaste" placeholder="&api_key=...&user_id=..." autocomplete="off" required />
+      </label>
+      <button type="submit" id="setup-submit">Save & Continue</button>
+      <div id="setup-error"></div>
+    </form>
+    <footer>
+      Go to <strong>My Account &rarr; Options &rarr; API Access Credentials</strong> on rule34.xxx and paste the whole box content above as-is.
+    </footer>
+  </section>
+
+  <section id="main-view" hidden>
+    <form id="job-form">
+      <input type="text" id="tags" placeholder="Enter search tags (e.g. cat_ears solo)" autocomplete="off" required />
+      <div class="options">
+        <label><input type="checkbox" id="includeImages" checked /> Images</label>
+        <label><input type="checkbox" id="includeVideos" checked /> Videos</label>
+        <label><input type="checkbox" id="includeJson" checked /> JSON metadata</label>
+      </div>
+      <div class="folder-row">
+        <span id="folder-label"></span>
+        <button type="button" class="secondary" id="change-folder">Change folder</button>
+      </div>
+      <button type="submit" id="submit-btn">Download</button>
+    </form>
+
+    <div id="status"></div>
+    <div id="progress-track"><div id="progress-fill"></div></div>
+    <ul id="failures"></ul>
+    <div id="preview"></div>
+
+    <footer><a href="#" id="edit-key">Change API key</a></footer>
+  </section>
+</main>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
