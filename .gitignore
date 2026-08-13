@@ -7,3 +7,4 @@ src-tauri/gen
 dist
 .claude
 *.log
+r34-dl.exe
