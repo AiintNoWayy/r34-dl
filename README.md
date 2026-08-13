@@ -1,51 +1,63 @@
 # r34-dl
 
-A small local web app that fetches images, videos, and metadata from rule34.xxx by search tag, using the site's official public API. No browser automation, no scraping.
+A small desktop app that fetches images, videos, and metadata from rule34.xxx by search tag, using the site's official public API. No browser automation, no scraping.
 
 ## Features
 
-- Search by tag straight from a simple web UI (no command line prompts)
+- Paste your API credentials once, then just type a tag and download
+- Native folder picker to choose where downloads go
 - Downloads images and/or videos, with metadata saved to JSON
 - Automatically paginates through all results for a tag
-- Skips duplicates on repeated runs
-- Sorts everything into `downloads/<tag>/images`, `downloads/<tag>/videos`, `downloads/<tag>/<tag>_data.json`
+- Skips files already downloaded, even across app restarts
+- Sorts everything into `<your folder>/<tag>/images`, `<your folder>/<tag>/videos`, `<your folder>/<tag>/<tag>_data.json`
+- Live progress bar with an ETA, and a thumbnail preview as results come in
 - Handles API rate limiting automatically
 
-## Requirements
+## For users: just run the app
+
+Grab the latest installer from [Releases](https://github.com/AiintNoWayy/r34-dl/releases) (or ask whoever built it for the `.exe`/`.msi` file), run it, and skip to [First run](#first-run) below. No Node.js or Rust needed to just use the app.
+
+## For developers: build from source
+
+### Requirements
 
 - [Node.js](https://nodejs.org/) 18 or newer
+- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain)
+- On Windows, [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) (preinstalled on most Windows 10/11 systems)
 - A free rule34.xxx account (needed for API access)
 
-## Setup
+### Setup
 
-1. Clone this repository and install dependencies:
-   ```bash
-   cd r34-dl
-   npm install
-   ```
+```bash
+git clone https://github.com/AiintNoWayy/r34-dl.git
+cd r34-dl
+npm install
+```
 
-2. Get your API credentials:
-   - Log in to your account at [rule34.xxx](https://rule34.xxx)
-   - Go to **My Account → Options** (`https://rule34.xxx/index.php?page=account&s=options`)
-   - Under **API Access Credentials**, tick **"Generate New Key?"** and save. This reveals your `user_id` and `api_key`
+Run in development mode (hot-reloads on save):
+```bash
+npm run tauri dev
+```
+
+Or build a standalone installer:
+```bash
+npm run tauri build
+```
+The installer lands in `src-tauri/target/release/bundle/` (`.msi` and `.exe` on Windows).
+
+## First run
+
+The app will ask for your API credentials the first time it opens:
+
+1. Log in to your account at [rule34.xxx](https://rule34.xxx)
+2. Go to **My Account → Options** (`https://rule34.xxx/index.php?page=account&s=options`)
+3. Under **API Access Credentials**, tick **"Generate New Key?"** and save. This reveals a box with `&api_key=...&user_id=...`
    - ⚠️ Only generate a key once. Requesting multiple keys can get your account suspended.
-
-3. Copy `.env.example` to `.env` and fill in the values you just got:
-   ```bash
-   cp .env.example .env
-   ```
-   ```
-   RULE34_USER_ID=your_user_id
-   RULE34_API_KEY=your_api_key
-   ```
+4. Paste that whole box content into the app's setup screen as-is. It parses out both values for you.
 
 ## Usage
 
-```bash
-npm start
-```
-
-Then open [http://localhost:3000](http://localhost:3000), enter your search tags, pick what you want (images / videos / JSON), and click **Download**. Progress and a thumbnail preview show up live; files land in `downloads/<tag>/` in the project folder.
+Type your search tags, pick what to grab (images / videos / JSON), optionally change the download folder, and hit **Download**. Progress, ETA, and a thumbnail preview update live. Re-running the same tag later only fetches what's new.
 
 ## Disclaimer
 
