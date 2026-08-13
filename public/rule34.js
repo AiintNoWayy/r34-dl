@@ -16,6 +16,7 @@ export function mediaTypeOf(fileUrl) {
 export function slugifyTags(tags) {
   return tags
     .trim()
+    .replace(/^user:/i, "")
     .replace(/\s+/g, "_")
     .replace(/[<>:"/\\|?*]/g, "_");
 }
@@ -212,6 +213,7 @@ export async function collectAllResults({ tags, credentials, alreadySeenIds, onR
     if (posts.length === 0) break;
 
     for (const post of posts) {
+      if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
       if (!post.file_url || alreadySeenIds.has(post.id)) continue;
       alreadySeenIds.add(post.id);
       await onRecord(toRecord(post));

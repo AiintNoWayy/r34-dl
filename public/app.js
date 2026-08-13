@@ -26,6 +26,7 @@ const setupSubmit = document.getElementById("setup-submit");
 const findUploaderForm = document.getElementById("find-uploader-form");
 const postLookupInput = document.getElementById("postLookup");
 const findUploaderBtn = document.getElementById("find-uploader-btn");
+const downloadPostBtn = document.getElementById("download-post-btn");
 const uploaderResultEl = document.getElementById("uploader-result");
 
 const jobForm = document.getElementById("job-form");
@@ -34,6 +35,10 @@ const searchBtn = document.getElementById("search-btn");
 const searchResultEl = document.getElementById("search-result");
 const submitBtn = document.getElementById("submit-btn");
 const cancelBtn = document.getElementById("cancel-btn");
+const queueAddBtn = document.getElementById("queue-add-btn");
+const queueSection = document.getElementById("queue-section");
+const queueList = document.getElementById("queue-list");
+const queueStartBtn = document.getElementById("queue-start-btn");
 const statusEl = document.getElementById("status");
 const previewEl = document.getElementById("preview");
 const failuresEl = document.getElementById("failures");
@@ -45,6 +50,9 @@ const editKeyLink = document.getElementById("edit-key");
 
 let downloadRoot = null;
 let currentAbortController = null;
+let queue = [];
+let queueIdCounter = 0;
+let queueRunning = false;
 
 async function getDefaultDownloadRoot() {
   const saved = await store.get("downloadRoot");
@@ -157,6 +165,45 @@ findUploaderForm.addEventListener("submit", async (event) => {
   }
 });
 
+downloadPostBtn.addEventListener("click", async () => {
+  uploaderResultEl.classList.remove("error");
+  uploaderResultEl.textContent = "";
+
+  const id = extractPostId(postLookupInput.value);
+  if (!id) {
+    uploaderResultEl.classList.add("error");
+    uploaderResultEl.textContent = "Couldn't find a post ID in that link.";
+    return;
+  }
+
+  downloadPostBtn.disabled = true;
+  downloadPostBtn.textContent = "Downloading...";
+
+  try {
+    const credentials = await store.get("credentials");
+    const post = await fetchPostById(id, credentials);
+    if (!post || !post.file_url) {
+      uploaderResultEl.classList.add("error");
+      uploaderResultEl.textContent = `No downloadable file found for id ${id}.`;
+      return;
+    }
+
+    const extension = fileExtensionOf(post.file_url);
+    const filePath = await join(downloadRoot, `${id}.${extension}`);
+    if (!(await exists(filePath))) {
+      await mkdir(downloadRoot, { recursive: true });
+      await writeFile(filePath, await downloadBinary(post.file_url));
+    }
+    uploaderResultEl.textContent = `Saved to ${filePath}`;
+  } catch (err) {
+    uploaderResultEl.classList.add("error");
+    uploaderResultEl.textContent = `Download failed: ${errorMessage(err)}`;
+  } finally {
+    downloadPostBtn.disabled = false;
+    downloadPostBtn.textContent = "Download this image";
+  }
+});
+
 changeFolderBtn.addEventListener("click", async () => {
   const picked = await open({ directory: true, multiple: false, title: "Choose download folder" });
   if (!picked) return;
@@ -212,19 +259,18 @@ searchBtn.addEventListener("click", async () => {
   }
 });
 
-jobForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
+/**
+ * Runs one full search-and-download job for `tags`. Drives the shared status
+ * area, progress bar, and preview grid. Returns "done", "cancelled", or
+ * "error" instead of throwing, so callers (the Download button, the queue
+ * runner) don't need their own try/catch around it.
+ */
+async function runJob(tags, { includeImages, includeVideos, includeJson }) {
   previewEl.innerHTML = "";
   failuresEl.innerHTML = "";
   progressTrack.classList.add("visible");
   progressFill.classList.add("indeterminate");
   progressFill.style.width = "";
-
-  const tags = tagsInput.value.trim();
-  const includeImages = document.getElementById("includeImages").checked;
-  const includeVideos = document.getElementById("includeVideos").checked;
-  const includeJson = document.getElementById("includeJson").checked;
-  if (!tags) return;
 
   const { userId, apiKey } = await store.get("credentials");
 
@@ -233,6 +279,7 @@ jobForm.addEventListener("submit", async (event) => {
 
   submitBtn.disabled = true;
   searchBtn.disabled = true;
+  queueStartBtn.disabled = true;
   cancelBtn.hidden = false;
   statusEl.textContent = "Starting...";
 
@@ -323,23 +370,128 @@ jobForm.addEventListener("submit", async (event) => {
       statusEl.textContent += ` (${failures.length} item(s) failed to download)`;
       console.error("Download failures:", failures);
     }
+    return "done";
   } catch (err) {
     if (err.name === "AbortError") {
       statusEl.textContent = `Cancelled. ${itemCount} item(s) saved to ${jobFolder}`;
-    } else {
-      statusEl.textContent = `Error: ${errorMessage(err)}`;
-      console.error(err);
+      return "cancelled";
     }
+    statusEl.textContent = `Error: ${errorMessage(err)}`;
+    console.error(err);
+    return "error";
   } finally {
     submitBtn.disabled = false;
     searchBtn.disabled = false;
+    queueStartBtn.disabled = false;
     cancelBtn.hidden = true;
     currentAbortController = null;
   }
+}
+
+jobForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const tags = tagsInput.value.trim();
+  if (!tags) return;
+  await runJob(tags, {
+    includeImages: document.getElementById("includeImages").checked,
+    includeVideos: document.getElementById("includeVideos").checked,
+    includeJson: document.getElementById("includeJson").checked,
+  });
 });
 
 cancelBtn.addEventListener("click", () => {
   currentAbortController?.abort();
+});
+
+function renderQueue() {
+  queueSection.hidden = queue.length === 0;
+  queueList.innerHTML = "";
+
+  for (const item of queue) {
+    const li = document.createElement("li");
+    li.className = item.status;
+
+    const tagSpan = document.createElement("span");
+    tagSpan.className = "queue-tag";
+    tagSpan.textContent = item.tags;
+
+    const countSpan = document.createElement("span");
+    countSpan.className = "queue-count";
+    countSpan.textContent = item.totalCount != null ? `${item.totalCount} items` : "? items";
+
+    const statusSpan = document.createElement("span");
+    statusSpan.className = "queue-status";
+    statusSpan.textContent = item.status;
+
+    li.append(tagSpan, countSpan, statusSpan);
+
+    if (item.status === "pending") {
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "secondary";
+      removeBtn.textContent = "Remove";
+      removeBtn.addEventListener("click", () => {
+        queue = queue.filter((q) => q.id !== item.id);
+        renderQueue();
+      });
+      li.append(removeBtn);
+    }
+
+    queueList.appendChild(li);
+  }
+}
+
+queueAddBtn.addEventListener("click", async () => {
+  const tags = tagsInput.value.trim();
+  if (!tags) return;
+
+  queueAddBtn.disabled = true;
+  queueAddBtn.textContent = "Adding...";
+
+  const options = {
+    includeImages: document.getElementById("includeImages").checked,
+    includeVideos: document.getElementById("includeVideos").checked,
+    includeJson: document.getElementById("includeJson").checked,
+  };
+
+  let totalCount = null;
+  try {
+    const credentials = await store.get("credentials");
+    totalCount = await fetchResultCount(tags, credentials);
+  } catch {
+    totalCount = null;
+  }
+
+  queue.push({ id: queueIdCounter++, tags, options, totalCount, status: "pending" });
+  renderQueue();
+  tagsInput.value = "";
+  tagsInput.focus();
+
+  queueAddBtn.disabled = false;
+  queueAddBtn.textContent = "Add to queue";
+});
+
+queueStartBtn.addEventListener("click", async () => {
+  if (queueRunning) return;
+  queueRunning = true;
+  queueStartBtn.disabled = true;
+  queueStartBtn.textContent = "Running...";
+
+  for (const item of queue) {
+    if (item.status !== "pending") continue;
+    item.status = "running";
+    renderQueue();
+
+    const outcome = await runJob(item.tags, item.options);
+    item.status = outcome;
+    renderQueue();
+
+    if (outcome === "cancelled") break;
+  }
+
+  queueRunning = false;
+  queueStartBtn.disabled = false;
+  queueStartBtn.textContent = "Start queue";
 });
 
 function renderPreview(records) {
