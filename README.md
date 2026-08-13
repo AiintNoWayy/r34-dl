@@ -2,6 +2,8 @@
 
 A small desktop app that fetches images, videos, and metadata from rule34.xxx by search tag, using the site's official public API. No browser automation, no scraping.
 
+![r34-dl screenshot](screenshot.png)
+
 ## Features
 
 - Paste your API credentials once, then just type a tag and download
