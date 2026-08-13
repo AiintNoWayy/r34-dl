@@ -14,7 +14,10 @@ export function mediaTypeOf(fileUrl) {
 }
 
 export function slugifyTags(tags) {
-  return tags.trim().replace(/\s+/g, "_");
+  return tags
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/[<>:"/\\|?*]/g, "_");
 }
 
 function buildQueryUrl(params) {
@@ -25,7 +28,31 @@ function buildQueryUrl(params) {
   return url.toString();
 }
 
-async function fetchResultsPage(tags, pageIndex, credentials) {
+/**
+ * Races `fetch` against `signal` directly, so a cancelled job stops waiting
+ * immediately even if the underlying HTTP client ignores AbortSignal itself.
+ */
+function abortableFetch(url, options, signal) {
+  const promise = fetch(url, { ...options, signal });
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
+async function fetchResultsPage(tags, pageIndex, credentials, signal) {
   const url = buildQueryUrl({
     page: "dapi",
     s: "post",
@@ -37,7 +64,7 @@ async function fetchResultsPage(tags, pageIndex, credentials) {
     user_id: credentials.userId,
     api_key: credentials.apiKey,
   });
-  const response = await fetch(url, { method: "GET" });
+  const response = await abortableFetch(url, { method: "GET" }, signal);
   if (response.status === 429) {
     const err = new Error("rate limited");
     err.rateLimited = true;
@@ -52,7 +79,7 @@ async function fetchResultsPage(tags, pageIndex, credentials) {
  * the json mode returns a bare array with no total. One cheap limit=1 XML
  * request up front is enough to size a progress bar.
  */
-export async function fetchResultCount(tags, credentials) {
+export async function fetchResultCount(tags, credentials, signal) {
   const url = buildQueryUrl({
     page: "dapi",
     s: "post",
@@ -62,10 +89,32 @@ export async function fetchResultCount(tags, credentials) {
     user_id: credentials.userId,
     api_key: credentials.apiKey,
   });
-  const response = await fetch(url, { method: "GET" });
+  const response = await abortableFetch(url, { method: "GET" }, signal);
   const text = await response.text();
   const match = text.match(/<posts count="(\d+)"/);
   return match ? parseInt(match[1], 10) : null;
+}
+
+export function extractPostId(input) {
+  const trimmed = input.trim();
+  if (/^\d+$/.test(trimmed)) return trimmed;
+  const match = trimmed.match(/[?&]id=(\d+)/);
+  return match ? match[1] : null;
+}
+
+export async function fetchPostById(id, credentials) {
+  const url = buildQueryUrl({
+    page: "dapi",
+    s: "post",
+    q: "index",
+    json: 1,
+    tags: `id:${id}`,
+    user_id: credentials.userId,
+    api_key: credentials.apiKey,
+  });
+  const response = await fetch(url, { method: "GET" });
+  const data = await response.json().catch(() => null);
+  return Array.isArray(data) && data.length > 0 ? data[0] : null;
 }
 
 export async function checkCredentials(credentials) {
@@ -104,28 +153,57 @@ function toRecord(post) {
   };
 }
 
-export async function downloadBinary(url) {
-  const response = await fetch(url, { method: "GET" });
+/**
+ * Fetches just the total count and the first page of results, without
+ * downloading anything, so the UI can show what a search would return.
+ */
+export async function searchPreview(tags, credentials, signal) {
+  const [totalCount, posts] = await Promise.all([
+    fetchResultCount(tags, credentials, signal),
+    fetchResultsPage(tags, 0, credentials, signal),
+  ]);
+  return {
+    totalCount,
+    records: posts.filter((post) => post.file_url).map(toRecord),
+  };
+}
+
+export async function downloadBinary(url, signal) {
+  const response = await abortableFetch(url, { method: "GET" }, signal);
   const buffer = await response.arrayBuffer();
   return new Uint8Array(buffer);
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+      },
+      { once: true },
+    );
+  });
+}
 
 /**
  * Walks every results page for `tags` and invokes `onRecord` for each new post.
- * Stops when a page returns fewer than RESULTS_PER_PAGE results.
+ * Stops when a page returns fewer than RESULTS_PER_PAGE results, or when `signal` aborts.
  */
-export async function collectAllResults({ tags, credentials, alreadySeenIds, onRecord, onPageComplete }) {
+export async function collectAllResults({ tags, credentials, alreadySeenIds, onRecord, onPageComplete, onRateLimited, signal }) {
   let pageIndex = 0;
 
   while (true) {
     let posts;
     try {
-      posts = await fetchResultsPage(tags, pageIndex, credentials);
+      posts = await fetchResultsPage(tags, pageIndex, credentials, signal);
     } catch (err) {
       if (err.rateLimited) {
-        await sleep(5000);
+        onRateLimited?.();
+        await sleep(5000, signal);
         continue;
       }
       throw err;
@@ -143,6 +221,6 @@ export async function collectAllResults({ tags, credentials, alreadySeenIds, onR
 
     if (posts.length < RESULTS_PER_PAGE) break;
     pageIndex++;
-    await sleep(500);
+    await sleep(500, signal);
   }
 }

@@ -5,6 +5,9 @@ A small desktop app that fetches images, videos, and metadata from rule34.xxx by
 ## Features
 
 - Paste your API credentials once, then just type a tag and download
+- Search first to see the result count and a preview before committing to a full download
+- Find who posted a specific image (no artist tag needed) and jump straight to everything else they've posted
+- Cancel a search or download at any time
 - Native folder picker to choose where downloads go
 - Downloads images and/or videos, with metadata saved to JSON
 - Automatically paginates through all results for a tag
@@ -12,6 +15,7 @@ A small desktop app that fetches images, videos, and metadata from rule34.xxx by
 - Sorts everything into `<your folder>/<tag>/images`, `<your folder>/<tag>/videos`, `<your folder>/<tag>/<tag>_data.json`
 - Live progress bar with an ETA, and a thumbnail preview as results come in
 - Handles API rate limiting automatically
+- Dark theme matching rule34.xxx's own color scheme
 
 ## For users: just run the app
 
@@ -57,7 +61,14 @@ The app will ask for your API credentials the first time it opens:
 
 ## Usage
 
-Type your search tags, pick what to grab (images / videos / JSON), optionally change the download folder, and hit **Download**. Progress, ETA, and a thumbnail preview update live. Re-running the same tag later only fetches what's new.
+Type your search tags, pick what to grab (images / videos / JSON), optionally change the download folder, then either:
+
+- Hit **Search** to see the result count and a preview first, or
+- Hit **Download** to go straight to fetching everything.
+
+Progress, ETA, and a thumbnail preview update live as items come in. Hit **Cancel** at any time to stop. Re-running the same tag later only fetches what's new.
+
+No artist tag on an image? Paste its post link or ID into the "Find who posted it" field to look up the uploader, then use the "Use as search" button to fetch everything else they've posted (searches `user:<name>` under the hood).
 
 ## Disclaimer
 

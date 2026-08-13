@@ -9,6 +9,9 @@ import {
   downloadBinary,
   collectAllResults,
   fetchResultCount,
+  extractPostId,
+  fetchPostById,
+  searchPreview,
   RESULTS_PER_PAGE,
 } from "./rule34.js";
 
@@ -20,8 +23,17 @@ const setupForm = document.getElementById("setup-form");
 const setupError = document.getElementById("setup-error");
 const setupSubmit = document.getElementById("setup-submit");
 
+const findUploaderForm = document.getElementById("find-uploader-form");
+const postLookupInput = document.getElementById("postLookup");
+const findUploaderBtn = document.getElementById("find-uploader-btn");
+const uploaderResultEl = document.getElementById("uploader-result");
+
 const jobForm = document.getElementById("job-form");
+const tagsInput = document.getElementById("tags");
+const searchBtn = document.getElementById("search-btn");
+const searchResultEl = document.getElementById("search-result");
 const submitBtn = document.getElementById("submit-btn");
+const cancelBtn = document.getElementById("cancel-btn");
 const statusEl = document.getElementById("status");
 const previewEl = document.getElementById("preview");
 const failuresEl = document.getElementById("failures");
@@ -32,6 +44,7 @@ const changeFolderBtn = document.getElementById("change-folder");
 const editKeyLink = document.getElementById("edit-key");
 
 let downloadRoot = null;
+let currentAbortController = null;
 
 async function getDefaultDownloadRoot() {
   const saved = await store.get("downloadRoot");
@@ -95,6 +108,55 @@ editKeyLink.addEventListener("click", (event) => {
   showSetupView();
 });
 
+findUploaderForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  uploaderResultEl.classList.remove("error");
+  uploaderResultEl.textContent = "";
+
+  const id = extractPostId(postLookupInput.value);
+  if (!id) {
+    uploaderResultEl.classList.add("error");
+    uploaderResultEl.textContent = "Couldn't find a post ID in that link.";
+    return;
+  }
+
+  findUploaderBtn.disabled = true;
+  findUploaderBtn.textContent = "Looking up...";
+
+  try {
+    const credentials = await store.get("credentials");
+    const post = await fetchPostById(id, credentials);
+    if (!post || !post.owner) {
+      uploaderResultEl.classList.add("error");
+      uploaderResultEl.textContent = `No post found for id ${id}.`;
+      return;
+    }
+
+    const label = document.createElement("span");
+    label.append("Posted by ");
+    const strong = document.createElement("strong");
+    strong.textContent = post.owner;
+    label.append(strong);
+
+    const useBtn = document.createElement("button");
+    useBtn.type = "button";
+    useBtn.className = "secondary";
+    useBtn.textContent = "Use as search";
+    useBtn.addEventListener("click", () => {
+      tagsInput.value = `user:${post.owner}`;
+      tagsInput.focus();
+    });
+
+    uploaderResultEl.append(label, useBtn);
+  } catch (err) {
+    uploaderResultEl.classList.add("error");
+    uploaderResultEl.textContent = `Lookup failed: ${errorMessage(err)}`;
+  } finally {
+    findUploaderBtn.disabled = false;
+    findUploaderBtn.textContent = "Find uploader";
+  }
+});
+
 changeFolderBtn.addEventListener("click", async () => {
   const picked = await open({ directory: true, multiple: false, title: "Choose download folder" });
   if (!picked) return;
@@ -121,6 +183,35 @@ function formatDuration(ms) {
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
+searchBtn.addEventListener("click", async () => {
+  const tags = tagsInput.value.trim();
+  if (!tags) return;
+
+  searchBtn.disabled = true;
+  submitBtn.disabled = true;
+  searchBtn.textContent = "Searching...";
+  searchResultEl.classList.remove("error");
+  searchResultEl.textContent = "";
+  previewEl.innerHTML = "";
+
+  try {
+    const credentials = await store.get("credentials");
+    const { totalCount, records } = await searchPreview(tags, credentials);
+    renderPreview(records);
+    searchResultEl.textContent =
+      totalCount != null
+        ? `${totalCount} result(s) for "${tags}". Showing the first ${records.length}. Hit Download to fetch everything.`
+        : `Found results for "${tags}" (exact count unavailable). Hit Download to fetch everything.`;
+  } catch (err) {
+    searchResultEl.classList.add("error");
+    searchResultEl.textContent = `Search failed: ${errorMessage(err)}`;
+  } finally {
+    searchBtn.disabled = false;
+    submitBtn.disabled = false;
+    searchBtn.textContent = "Search";
+  }
+});
+
 jobForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   previewEl.innerHTML = "";
@@ -129,7 +220,7 @@ jobForm.addEventListener("submit", async (event) => {
   progressFill.classList.add("indeterminate");
   progressFill.style.width = "";
 
-  const tags = document.getElementById("tags").value.trim();
+  const tags = tagsInput.value.trim();
   const includeImages = document.getElementById("includeImages").checked;
   const includeVideos = document.getElementById("includeVideos").checked;
   const includeJson = document.getElementById("includeJson").checked;
@@ -137,35 +228,47 @@ jobForm.addEventListener("submit", async (event) => {
 
   const { userId, apiKey } = await store.get("credentials");
 
+  currentAbortController = new AbortController();
+  const { signal } = currentAbortController;
+
   submitBtn.disabled = true;
+  searchBtn.disabled = true;
+  cancelBtn.hidden = false;
   statusEl.textContent = "Starting...";
 
-  const slug = slugifyTags(tags);
-  const jobFolder = await join(downloadRoot, slug);
-  await mkdir(jobFolder, { recursive: true });
-
-  const jsonPath = await join(jobFolder, `${slug}_data.json`);
-  const existingRecords = (await exists(jsonPath)) ? JSON.parse(await readTextFile(jsonPath)) : [];
-  const seenIds = new Set(existingRecords.map((r) => r.id));
-  const allRecords = [...existingRecords];
-  let itemCount = allRecords.length;
-  const previewRecords = [];
-  const failures = [];
-
-  const totalCount = await fetchResultCount(tags, { userId, apiKey }).catch(() => null);
-  const totalPages = totalCount ? Math.ceil(totalCount / RESULTS_PER_PAGE) : null;
-  const jobStart = Date.now();
-
-  if (totalPages) {
-    progressFill.classList.remove("indeterminate");
-    progressFill.style.width = "0%";
-  }
+  let jobFolder = "";
+  let itemCount = 0;
 
   try {
+    const slug = slugifyTags(tags);
+    jobFolder = await join(downloadRoot, slug);
+    await mkdir(jobFolder, { recursive: true });
+
+    const jsonPath = await join(jobFolder, `${slug}_data.json`);
+    const existingRecords = (await exists(jsonPath)) ? JSON.parse(await readTextFile(jsonPath)) : [];
+    const seenIds = new Set(existingRecords.map((r) => r.id));
+    const allRecords = [...existingRecords];
+    itemCount = allRecords.length;
+    const previewRecords = [];
+    const failures = [];
+
+    const totalCount = await fetchResultCount(tags, { userId, apiKey }, signal).catch(() => null);
+    const totalPages = totalCount ? Math.ceil(totalCount / RESULTS_PER_PAGE) : null;
+    const jobStart = Date.now();
+
+    if (totalPages) {
+      progressFill.classList.remove("indeterminate");
+      progressFill.style.width = "0%";
+    }
+
     await collectAllResults({
       tags,
       credentials: { userId, apiKey },
       alreadySeenIds: seenIds,
+      signal,
+      onRateLimited: () => {
+        statusEl.textContent = `Rate limited by rule34.xxx, retrying in 5s... (${itemCount} items so far)`;
+      },
       onRecord: async (record) => {
         allRecords.push(record);
         itemCount = allRecords.length;
@@ -184,7 +287,7 @@ jobForm.addEventListener("submit", async (event) => {
             const filePath = await join(dir, filename);
             if (!(await exists(filePath))) {
               await mkdir(dir, { recursive: true });
-              await writeFile(filePath, await downloadBinary(record.src));
+              await writeFile(filePath, await downloadBinary(record.src, signal));
             }
           }
         } catch (err) {
@@ -198,19 +301,17 @@ jobForm.addEventListener("submit", async (event) => {
         if (includeJson) {
           await writeTextFile(jsonPath, JSON.stringify(allRecords, null, 2));
         }
-      },
-      onPageComplete: (pageNumber) => {
-        if (totalPages) {
-          const pct = Math.min(100, Math.round((pageNumber / totalPages) * 100));
+
+        if (totalCount) {
+          const pct = Math.min(100, Math.round((itemCount / totalCount) * 100));
           progressFill.style.width = `${pct}%`;
           const elapsed = Date.now() - jobStart;
-          const remainingPages = Math.max(totalPages - pageNumber, 0);
-          const eta = (elapsed / pageNumber) * remainingPages;
+          const eta = (elapsed / itemCount) * Math.max(totalCount - itemCount, 0);
           statusEl.textContent =
-            `Fetching "${tags}", page ${pageNumber}/${totalPages} (${pct}%), ${itemCount}/${totalCount} items` +
-            (remainingPages > 0 ? `, ~${formatDuration(eta)} left...` : "...");
+            `Fetching "${tags}", ${itemCount}/${totalCount} items (${pct}%)` +
+            (itemCount < totalCount ? `, ~${formatDuration(eta)} left...` : "...");
         } else {
-          statusEl.textContent = `Fetching "${tags}", page ${pageNumber}, ${itemCount} items collected...`;
+          statusEl.textContent = `Fetching "${tags}", ${itemCount} items collected...`;
         }
       },
     });
@@ -223,11 +324,22 @@ jobForm.addEventListener("submit", async (event) => {
       console.error("Download failures:", failures);
     }
   } catch (err) {
-    statusEl.textContent = `Error: ${errorMessage(err)}`;
-    console.error(err);
+    if (err.name === "AbortError") {
+      statusEl.textContent = `Cancelled. ${itemCount} item(s) saved to ${jobFolder}`;
+    } else {
+      statusEl.textContent = `Error: ${errorMessage(err)}`;
+      console.error(err);
+    }
   } finally {
     submitBtn.disabled = false;
+    searchBtn.disabled = false;
+    cancelBtn.hidden = true;
+    currentAbortController = null;
   }
+});
+
+cancelBtn.addEventListener("click", () => {
+  currentAbortController?.abort();
 });
 
 function renderPreview(records) {

@@ -6,20 +6,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <style>
   :root {
-    --bg: #14161a;
-    --panel: #1c1f25;
-    --border: #2c313a;
-    --text: #e6e8eb;
-    --muted: #8b93a1;
-    --accent: #5b8def;
-    --danger: #e0607a;
+    --bg: #293129;
+    --panel: #303a30;
+    --border: #3c453c;
+    --text: #c0c0c0;
+    --muted: #878787;
+    --accent: #b0e0b0;
+    --accent-text: #1a201a;
+    --danger: #f0a0a0;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    font-family: Tahoma, "Trebuchet MS", Arial, sans-serif;
     display: flex;
     justify-content: center;
     padding: 2.5rem 1rem;
@@ -48,9 +49,10 @@
   label.field { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.85rem; color: var(--muted); }
   .options { display: flex; gap: 1.25rem; flex-wrap: wrap; color: var(--muted); font-size: 0.9rem; }
   .options label { display: flex; align-items: center; gap: 0.4rem; }
+  input[type="checkbox"] { accent-color: var(--accent); }
   button {
     background: var(--accent);
-    color: white;
+    color: var(--accent-text);
     border: none;
     border-radius: 6px;
     padding: 0.65rem 1rem;
@@ -59,6 +61,10 @@
   }
   button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
   button:disabled { opacity: 0.6; cursor: default; }
+  .job-actions { display: flex; gap: 0.75rem; }
+  .job-actions #search-btn, .job-actions #submit-btn { flex: 1; }
+  #search-result { font-size: 0.9rem; color: var(--muted); min-height: 1.2em; }
+  #search-result.error { color: var(--danger); }
   .folder-row { display: flex; align-items: center; gap: 0.75rem; color: var(--muted); font-size: 0.85rem; }
   .folder-row span { flex: 1; overflow-wrap: anywhere; }
   #status {
@@ -68,6 +74,11 @@
     min-height: 1.2em;
   }
   #setup-error { color: var(--danger); font-size: 0.85rem; min-height: 1.2em; }
+  #find-uploader-form { margin-bottom: 1rem; }
+  #uploader-result { font-size: 0.9rem; color: var(--muted); min-height: 1.2em; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  #uploader-result.error { color: var(--danger); }
+  #uploader-result strong { color: var(--text); }
+  #uploader-result button { padding: 0.35rem 0.7rem; font-size: 0.85rem; }
   #progress-track {
     margin-top: 0.5rem;
     height: 8px;
@@ -131,8 +142,17 @@
   </section>
 
   <section id="main-view" hidden>
+    <form id="find-uploader-form">
+      <label class="field">
+        No artist tag? Find who posted it
+        <input type="text" id="postLookup" placeholder="Paste a post link or ID" autocomplete="off" />
+      </label>
+      <button type="submit" id="find-uploader-btn" class="secondary">Find uploader</button>
+      <div id="uploader-result"></div>
+    </form>
+
     <form id="job-form">
-      <input type="text" id="tags" placeholder="Enter search tags (e.g. cat_ears solo)" autocomplete="off" required />
+      <input type="text" id="tags" placeholder="Search tags" autocomplete="off" required />
       <div class="options">
         <label><input type="checkbox" id="includeImages" checked /> Images</label>
         <label><input type="checkbox" id="includeVideos" checked /> Videos</label>
@@ -142,9 +162,14 @@
         <span id="folder-label"></span>
         <button type="button" class="secondary" id="change-folder">Change folder</button>
       </div>
-      <button type="submit" id="submit-btn">Download</button>
+      <div class="job-actions">
+        <button type="button" class="secondary" id="search-btn">Search</button>
+        <button type="submit" id="submit-btn">Download</button>
+        <button type="button" class="secondary" id="cancel-btn" hidden>Cancel</button>
+      </div>
     </form>
 
+    <div id="search-result"></div>
     <div id="status"></div>
     <div id="progress-track"><div id="progress-fill"></div></div>
     <ul id="failures"></ul>
