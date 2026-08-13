@@ -1,9 +1,10 @@
 import { Store } from "@tauri-apps/plugin-store";
 import { open } from "@tauri-apps/plugin-dialog";
-import { mkdir, writeFile, writeTextFile, readTextFile, exists } from "@tauri-apps/plugin-fs";
+import { mkdir, writeFile, writeTextFile, readTextFile, exists, copyFile } from "@tauri-apps/plugin-fs";
 import { join, downloadDir } from "@tauri-apps/api/path";
 import {
   slugifyTags,
+  combineTags,
   fileExtensionOf,
   checkCredentials,
   downloadBinary,
@@ -31,6 +32,7 @@ const uploaderResultEl = document.getElementById("uploader-result");
 
 const jobForm = document.getElementById("job-form");
 const tagsInput = document.getElementById("tags");
+const excludeTagsInput = document.getElementById("excludeTags");
 const searchBtn = document.getElementById("search-btn");
 const searchResultEl = document.getElementById("search-result");
 const submitBtn = document.getElementById("submit-btn");
@@ -53,6 +55,8 @@ let currentAbortController = null;
 let queue = [];
 let queueIdCounter = 0;
 let queueRunning = false;
+let globalIndex = new Map();
+let globalIndexPath = null;
 
 async function getDefaultDownloadRoot() {
   const saved = await store.get("downloadRoot");
@@ -60,11 +64,65 @@ async function getDefaultDownloadRoot() {
   return join(await downloadDir(), "r34-dl");
 }
 
+/**
+ * A per-download-root index of post id -> file path, so the same post found
+ * under two different searches (e.g. a tag and its uploader) is copied
+ * locally instead of downloaded twice.
+ */
+async function loadGlobalIndex() {
+  globalIndexPath = await join(downloadRoot, "downloaded_index.json");
+  try {
+    const data = (await exists(globalIndexPath)) ? JSON.parse(await readTextFile(globalIndexPath)) : {};
+    globalIndex = new Map(Object.entries(data));
+  } catch {
+    globalIndex = new Map();
+  }
+}
+
+async function saveGlobalIndex() {
+  await writeTextFile(globalIndexPath, JSON.stringify(Object.fromEntries(globalIndex), null, 2));
+}
+
+/**
+ * Writes `filePath` from `url` unless it's already there, copying it locally
+ * from an earlier download of the same post id when possible instead of
+ * re-fetching the bytes over the network.
+ */
+async function fetchOrCopy(id, url, filePath, signal) {
+  if (await exists(filePath)) return;
+
+  const key = String(id);
+  const indexedPath = globalIndex.get(key);
+  if (indexedPath && indexedPath !== filePath && (await exists(indexedPath))) {
+    await copyFile(indexedPath, filePath);
+    return;
+  }
+
+  await writeFile(filePath, await downloadBinary(url, signal));
+  globalIndex.set(key, filePath);
+  await saveGlobalIndex();
+}
+
+async function saveQueue() {
+  await store.set("queue", queue);
+  await store.save();
+}
+
+async function loadQueue() {
+  const saved = await store.get("queue");
+  if (!Array.isArray(saved)) return;
+  queue = saved.map((item) => (item.status === "running" ? { ...item, status: "pending" } : item));
+  queueIdCounter = queue.reduce((max, item) => Math.max(max, item.id + 1), 0);
+  renderQueue();
+}
+
 async function showMainView() {
   setupView.hidden = true;
   mainView.hidden = false;
   downloadRoot = await getDefaultDownloadRoot();
   folderLabel.textContent = downloadRoot;
+  await loadGlobalIndex();
+  await loadQueue();
 }
 
 function showSetupView() {
@@ -190,10 +248,8 @@ downloadPostBtn.addEventListener("click", async () => {
 
     const extension = fileExtensionOf(post.file_url);
     const filePath = await join(downloadRoot, `${id}.${extension}`);
-    if (!(await exists(filePath))) {
-      await mkdir(downloadRoot, { recursive: true });
-      await writeFile(filePath, await downloadBinary(post.file_url));
-    }
+    await mkdir(downloadRoot, { recursive: true });
+    await fetchOrCopy(id, post.file_url, filePath);
     uploaderResultEl.textContent = `Saved to ${filePath}`;
   } catch (err) {
     uploaderResultEl.classList.add("error");
@@ -211,6 +267,7 @@ changeFolderBtn.addEventListener("click", async () => {
   folderLabel.textContent = downloadRoot;
   await store.set("downloadRoot", downloadRoot);
   await store.save();
+  await loadGlobalIndex();
 });
 
 function errorMessage(err) {
@@ -233,6 +290,7 @@ function formatDuration(ms) {
 searchBtn.addEventListener("click", async () => {
   const tags = tagsInput.value.trim();
   if (!tags) return;
+  const queryTags = combineTags(tags, excludeTagsInput.value.trim());
 
   searchBtn.disabled = true;
   submitBtn.disabled = true;
@@ -243,7 +301,7 @@ searchBtn.addEventListener("click", async () => {
 
   try {
     const credentials = await store.get("credentials");
-    const { totalCount, records } = await searchPreview(tags, credentials);
+    const { totalCount, records } = await searchPreview(queryTags, credentials);
     renderPreview(records);
     searchResultEl.textContent =
       totalCount != null
@@ -265,7 +323,8 @@ searchBtn.addEventListener("click", async () => {
  * "error" instead of throwing, so callers (the Download button, the queue
  * runner) don't need their own try/catch around it.
  */
-async function runJob(tags, { includeImages, includeVideos, includeJson }) {
+async function runJob(tags, { excludeTags, includeImages, includeVideos, includeJson }) {
+  const queryTags = combineTags(tags, excludeTags || "");
   previewEl.innerHTML = "";
   failuresEl.innerHTML = "";
   progressTrack.classList.add("visible");
@@ -299,7 +358,7 @@ async function runJob(tags, { includeImages, includeVideos, includeJson }) {
     const previewRecords = [];
     const failures = [];
 
-    const totalCount = await fetchResultCount(tags, { userId, apiKey }, signal).catch(() => null);
+    const totalCount = await fetchResultCount(queryTags, { userId, apiKey }, signal).catch(() => null);
     const totalPages = totalCount ? Math.ceil(totalCount / RESULTS_PER_PAGE) : null;
     const jobStart = Date.now();
 
@@ -309,7 +368,7 @@ async function runJob(tags, { includeImages, includeVideos, includeJson }) {
     }
 
     await collectAllResults({
-      tags,
+      tags: queryTags,
       credentials: { userId, apiKey },
       alreadySeenIds: seenIds,
       signal,
@@ -332,10 +391,8 @@ async function runJob(tags, { includeImages, includeVideos, includeJson }) {
           if (wantsDownload) {
             const dir = await join(jobFolder, record.type === "image" ? "images" : "videos");
             const filePath = await join(dir, filename);
-            if (!(await exists(filePath))) {
-              await mkdir(dir, { recursive: true });
-              await writeFile(filePath, await downloadBinary(record.src, signal));
-            }
+            await mkdir(dir, { recursive: true });
+            await fetchOrCopy(record.id, record.src, filePath, signal);
           }
         } catch (err) {
           const message = `#${record.id}: ${errorMessage(err)}`;
@@ -393,6 +450,7 @@ jobForm.addEventListener("submit", async (event) => {
   const tags = tagsInput.value.trim();
   if (!tags) return;
   await runJob(tags, {
+    excludeTags: excludeTagsInput.value.trim(),
     includeImages: document.getElementById("includeImages").checked,
     includeVideos: document.getElementById("includeVideos").checked,
     includeJson: document.getElementById("includeJson").checked,
@@ -433,6 +491,7 @@ function renderQueue() {
       removeBtn.addEventListener("click", () => {
         queue = queue.filter((q) => q.id !== item.id);
         renderQueue();
+        saveQueue();
       });
       li.append(removeBtn);
     }
@@ -444,11 +503,13 @@ function renderQueue() {
 queueAddBtn.addEventListener("click", async () => {
   const tags = tagsInput.value.trim();
   if (!tags) return;
+  const excludeTags = excludeTagsInput.value.trim();
 
   queueAddBtn.disabled = true;
   queueAddBtn.textContent = "Adding...";
 
   const options = {
+    excludeTags,
     includeImages: document.getElementById("includeImages").checked,
     includeVideos: document.getElementById("includeVideos").checked,
     includeJson: document.getElementById("includeJson").checked,
@@ -457,14 +518,16 @@ queueAddBtn.addEventListener("click", async () => {
   let totalCount = null;
   try {
     const credentials = await store.get("credentials");
-    totalCount = await fetchResultCount(tags, credentials);
+    totalCount = await fetchResultCount(combineTags(tags, excludeTags), credentials);
   } catch {
     totalCount = null;
   }
 
   queue.push({ id: queueIdCounter++, tags, options, totalCount, status: "pending" });
   renderQueue();
+  await saveQueue();
   tagsInput.value = "";
+  excludeTagsInput.value = "";
   tagsInput.focus();
 
   queueAddBtn.disabled = false;
@@ -481,10 +544,12 @@ queueStartBtn.addEventListener("click", async () => {
     if (item.status !== "pending") continue;
     item.status = "running";
     renderQueue();
+    await saveQueue();
 
     const outcome = await runJob(item.tags, item.options);
     item.status = outcome;
     renderQueue();
+    await saveQueue();
 
     if (outcome === "cancelled") break;
   }

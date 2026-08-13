@@ -13,6 +13,16 @@ export function mediaTypeOf(fileUrl) {
   return VIDEO_EXTENSIONS.has(fileExtensionOf(fileUrl)) ? "video" : "image";
 }
 
+export function combineTags(tags, excludeTags) {
+  const excluded = excludeTags
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((tag) => `-${tag}`)
+    .join(" ");
+  return excluded ? `${tags} ${excluded}` : tags;
+}
+
 export function slugifyTags(tags) {
   return tags
     .trim()
