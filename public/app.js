@@ -448,15 +448,20 @@ async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVid
     const existingRecords = (await exists(jsonPath)) ? JSON.parse(await readTextFile(jsonPath)) : [];
     const seenIds = new Set(existingRecords.map((r) => r.id));
     const allRecords = [...existingRecords];
-    itemCount = allRecords.length;
+    const startCount = existingRecords.length;
+    itemCount = startCount;
     const previewRecords = [];
     const failures = [];
 
     const totalCount = await fetchResultCount(queryTags, { userId, apiKey }, signal).catch(() => null);
     const totalPages = totalCount ? Math.ceil(totalCount / RESULTS_PER_PAGE) : null;
+    // The target for this run's progress bar/ETA: capped at the batch limit
+    // (from where we're starting), not the full result count, so a batched
+    // run doesn't show an ETA for work it isn't going to do right now.
+    const target = batchLimit ? Math.min(totalCount ?? Infinity, startCount + batchLimit) : totalCount;
     const jobStart = Date.now();
 
-    if (totalPages) {
+    if (target) {
       progressFill.classList.remove("indeterminate");
       progressFill.style.width = "0%";
     }
@@ -501,14 +506,15 @@ async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVid
           await writeTextFile(jsonPath, JSON.stringify(allRecords, null, 2));
         }
 
-        if (totalCount) {
-          const pct = Math.min(100, Math.round((itemCount / totalCount) * 100));
+        if (target) {
+          const pct = Math.min(100, Math.round((itemCount / target) * 100));
           progressFill.style.width = `${pct}%`;
           const elapsed = Date.now() - jobStart;
-          const eta = (elapsed / itemCount) * Math.max(totalCount - itemCount, 0);
+          const eta = (elapsed / newItemsThisRun) * Math.max(target - itemCount, 0);
+          const totalSuffix = totalCount && target < totalCount ? ` of ${totalCount} total` : "";
           statusEl.textContent =
-            `Fetching "${tags}", ${itemCount}/${totalCount} items (${pct}%)` +
-            (itemCount < totalCount ? `, ~${formatDuration(eta)} left...` : "...");
+            `Fetching "${tags}", ${itemCount}/${target} items${totalSuffix} (${pct}%)` +
+            (itemCount < target ? `, ~${formatDuration(eta)} left...` : "...");
         } else {
           statusEl.textContent = `Fetching "${tags}", ${itemCount} items collected...`;
         }
@@ -576,7 +582,7 @@ function renderQueue() {
 
     const tagSpan = document.createElement("span");
     tagSpan.className = "queue-tag";
-    tagSpan.textContent = item.tags;
+    tagSpan.textContent = item.label || item.tags;
 
     const countSpan = document.createElement("span");
     countSpan.className = "queue-count";
@@ -629,7 +635,12 @@ queueAddBtn.addEventListener("click", async () => {
     totalCount = null;
   }
 
-  queue.push({ id: queueIdCounter++, tags, options, totalCount, status: "pending" });
+  const { batchLimit } = options;
+  const runs = batchLimit && totalCount ? Math.ceil(totalCount / batchLimit) : 1;
+  for (let i = 0; i < runs; i++) {
+    const label = runs > 1 ? `${tags} (batch ${i + 1}/${runs})` : tags;
+    queue.push({ id: queueIdCounter++, tags, label, options, totalCount, status: "pending" });
+  }
   renderQueue();
   await saveQueue();
   tagsInput.value = "";
