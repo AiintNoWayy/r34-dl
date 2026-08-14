@@ -169,7 +169,6 @@
   footer { margin-top: 1rem; font-size: 0.8rem; color: var(--muted); }
   footer a { color: var(--accent); }
   #update-banner {
-    display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
@@ -180,6 +179,7 @@
     margin-bottom: 1.5rem;
     font-size: 0.9rem;
   }
+  #update-banner:not([hidden]) { display: flex; }
   #update-banner button { padding: 0.4rem 0.9rem; font-size: 0.85rem; white-space: nowrap; }
   #moreOptionsToggle { align-self: flex-start; color: var(--accent); font-size: 0.85rem; text-decoration: none; }
   #moreOptionsToggle:hover { text-decoration: underline; }
