@@ -33,6 +33,7 @@ const uploaderResultEl = document.getElementById("uploader-result");
 const jobForm = document.getElementById("job-form");
 const tagsInput = document.getElementById("tags");
 const excludeTagsInput = document.getElementById("excludeTags");
+const filterAiPostsInput = document.getElementById("filterAiPosts");
 const batchLimitInput = document.getElementById("batchLimit");
 const moreOptionsToggle = document.getElementById("moreOptionsToggle");
 const moreOptions = document.getElementById("moreOptions");
@@ -352,6 +353,15 @@ scanBtn.addEventListener("click", async () => {
   }
 });
 
+function getEffectiveExcludeTags() {
+  const manual = excludeTagsInput.value.trim();
+  const tags = manual ? manual.split(/\s+/) : [];
+  if (filterAiPostsInput.checked && !tags.includes("ai_generated")) {
+    tags.push("ai_generated");
+  }
+  return tags.join(" ");
+}
+
 function errorMessage(err) {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
@@ -372,7 +382,7 @@ function formatDuration(ms) {
 searchBtn.addEventListener("click", async () => {
   const tags = tagsInput.value.trim();
   if (!tags) return;
-  const queryTags = combineTags(tags, excludeTagsInput.value.trim());
+  const queryTags = combineTags(tags, getEffectiveExcludeTags());
 
   searchBtn.disabled = true;
   submitBtn.disabled = true;
@@ -544,7 +554,7 @@ jobForm.addEventListener("submit", async (event) => {
   const tags = tagsInput.value.trim();
   if (!tags) return;
   await runJob(tags, {
-    excludeTags: excludeTagsInput.value.trim(),
+    excludeTags: getEffectiveExcludeTags(),
     batchLimit: batchLimitInput.value ? Number(batchLimitInput.value) : null,
     includeImages: document.getElementById("includeImages").checked,
     includeVideos: document.getElementById("includeVideos").checked,
@@ -598,7 +608,7 @@ function renderQueue() {
 queueAddBtn.addEventListener("click", async () => {
   const tags = tagsInput.value.trim();
   if (!tags) return;
-  const excludeTags = excludeTagsInput.value.trim();
+  const excludeTags = getEffectiveExcludeTags();
 
   queueAddBtn.disabled = true;
   queueAddBtn.textContent = "Adding...";
