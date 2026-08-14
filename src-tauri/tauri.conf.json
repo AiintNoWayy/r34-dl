@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "r34-dl",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "identifier": "com.aiintnowayy.r34dl",
   "build": {
     "frontendDist": "../dist",
