@@ -164,6 +164,18 @@ async function scanDownloadRoot() {
   return { foldersScanned, newlyIndexed };
 }
 
+async function getExistingCount(tags) {
+  try {
+    const slug = slugifyTags(tags);
+    const jsonPath = await join(downloadRoot, slug, `${slug}_data.json`);
+    if (!(await exists(jsonPath))) return 0;
+    const records = JSON.parse(await readTextFile(jsonPath));
+    return Array.isArray(records) ? records.length : 0;
+  } catch {
+    return 0;
+  }
+}
+
 async function saveQueue() {
   await store.set("queue", queue);
   await store.save();
@@ -566,19 +578,19 @@ async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVid
       statusEl.textContent += ` (${failures.length} item(s) failed to download)`;
       console.error("Download failures:", failures);
     }
-    return "done";
+    return { outcome: "done", itemCount };
   } catch (err) {
     if (err.name === "AbortError") {
       if (batchLimitReached) {
         statusEl.textContent = `Stopped after ${newItemsThisRun} new item(s) (batch limit reached). Run again to continue.`;
-        return "partial";
+        return { outcome: "partial", itemCount };
       }
       statusEl.textContent = `Cancelled. ${itemCount} item(s) saved to ${jobFolder}`;
-      return "cancelled";
+      return { outcome: "cancelled", itemCount };
     }
     statusEl.textContent = `Error: ${errorMessage(err)}`;
     console.error(err);
-    return "error";
+    return { outcome: "error", itemCount };
   } finally {
     submitBtn.disabled = false;
     searchBtn.disabled = false;
@@ -619,7 +631,12 @@ function renderQueue() {
 
     const countSpan = document.createElement("span");
     countSpan.className = "queue-count";
-    countSpan.textContent = item.totalCount != null ? `${item.totalCount} items` : "? items";
+    countSpan.textContent =
+      item.target != null
+        ? `${item.startCount ?? 0}/${item.target} items`
+        : item.totalCount != null
+          ? `${item.totalCount} items`
+          : "? items";
 
     const statusSpan = document.createElement("span");
     statusSpan.className = "queue-status";
@@ -628,6 +645,22 @@ function renderQueue() {
     li.append(tagSpan, countSpan, statusSpan);
 
     if (item.status === "pending") {
+      const index = queue.indexOf(item);
+
+      const upBtn = document.createElement("button");
+      upBtn.type = "button";
+      upBtn.className = "secondary";
+      upBtn.textContent = "▲";
+      upBtn.disabled = index === 0;
+      upBtn.addEventListener("click", () => moveQueueItem(item.id, -1));
+
+      const downBtn = document.createElement("button");
+      downBtn.type = "button";
+      downBtn.className = "secondary";
+      downBtn.textContent = "▼";
+      downBtn.disabled = index === queue.length - 1;
+      downBtn.addEventListener("click", () => moveQueueItem(item.id, 1));
+
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "secondary";
@@ -637,11 +670,20 @@ function renderQueue() {
         renderQueue();
         saveQueue();
       });
-      li.append(removeBtn);
+      li.append(upBtn, downBtn, removeBtn);
     }
 
     queueList.appendChild(li);
   }
+}
+
+function moveQueueItem(id, direction) {
+  const index = queue.findIndex((q) => q.id === id);
+  const newIndex = index + direction;
+  if (index < 0 || newIndex < 0 || newIndex >= queue.length) return;
+  [queue[index], queue[newIndex]] = [queue[newIndex], queue[index]];
+  renderQueue();
+  saveQueue();
 }
 
 queueAddBtn.addEventListener("click", async () => {
@@ -667,12 +709,14 @@ queueAddBtn.addEventListener("click", async () => {
   } catch {
     totalCount = null;
   }
+  const startCount = await getExistingCount(tags);
 
   const { batchLimit } = options;
   const runs = batchLimit && totalCount ? Math.ceil(totalCount / batchLimit) : 1;
   for (let i = 0; i < runs; i++) {
     const label = runs > 1 ? `${tags} (batch ${i + 1}/${runs})` : tags;
-    queue.push({ id: queueIdCounter++, tags, label, options, totalCount, status: "pending" });
+    const target = batchLimit ? Math.min(totalCount ?? Infinity, startCount + batchLimit * (i + 1)) : totalCount;
+    queue.push({ id: queueIdCounter++, tags, label, options, totalCount, startCount, target, status: "pending" });
   }
   renderQueue();
   await saveQueue();
@@ -697,8 +741,17 @@ queueStartBtn.addEventListener("click", async () => {
     renderQueue();
     await saveQueue();
 
-    const outcome = await runJob(item.tags, item.options);
+    const { outcome, itemCount } = await runJob(item.tags, item.options);
     item.status = outcome;
+    item.startCount = itemCount;
+    // Sibling batches of the same search haven't run yet, but the items
+    // this run just saved are already on disk, so their own starting
+    // point has effectively moved forward too.
+    for (const sibling of queue) {
+      if (sibling !== item && sibling.tags === item.tags && sibling.status === "pending") {
+        sibling.startCount = itemCount;
+      }
+    }
     renderQueue();
     await saveQueue();
 
