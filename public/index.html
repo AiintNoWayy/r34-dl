@@ -37,7 +37,7 @@
     flex-direction: column;
     gap: 1rem;
   }
-  input[type="text"], input[type="password"] {
+  input[type="text"], input[type="password"], input[type="number"] {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -141,8 +141,10 @@
   }
   footer { margin-top: 1rem; font-size: 0.8rem; color: var(--muted); }
   footer a { color: var(--accent); }
-  #excludeTagsToggle { align-self: flex-start; color: var(--accent); font-size: 0.85rem; text-decoration: none; }
-  #excludeTagsToggle:hover { text-decoration: underline; }
+  #moreOptionsToggle { align-self: flex-start; color: var(--accent); font-size: 0.85rem; text-decoration: none; }
+  #moreOptionsToggle:hover { text-decoration: underline; }
+  #moreOptions { flex-direction: column; gap: 0.75rem; }
+  #moreOptions:not([hidden]) { display: flex; }
 </style>
 </head>
 <body>
@@ -179,8 +181,11 @@
 
     <form id="job-form">
       <input type="text" id="tags" placeholder="Search tags" autocomplete="off" required />
-      <a href="#" id="excludeTagsToggle">+ Exclude tags</a>
-      <input type="text" id="excludeTags" placeholder="Exclude tags (space-separated)" autocomplete="off" hidden />
+      <a href="#" id="moreOptionsToggle">+ More options</a>
+      <div id="moreOptions" hidden>
+        <input type="text" id="excludeTags" placeholder="Exclude tags (space-separated)" autocomplete="off" />
+        <input type="number" id="batchLimit" placeholder="Stop after this many new items (optional)" autocomplete="off" min="1" />
+      </div>
       <div class="options">
         <label><input type="checkbox" id="includeImages" checked /> Images</label>
         <label><input type="checkbox" id="includeVideos" checked /> Videos</label>

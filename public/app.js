@@ -33,7 +33,9 @@ const uploaderResultEl = document.getElementById("uploader-result");
 const jobForm = document.getElementById("job-form");
 const tagsInput = document.getElementById("tags");
 const excludeTagsInput = document.getElementById("excludeTags");
-const excludeTagsToggle = document.getElementById("excludeTagsToggle");
+const batchLimitInput = document.getElementById("batchLimit");
+const moreOptionsToggle = document.getElementById("moreOptionsToggle");
+const moreOptions = document.getElementById("moreOptions");
 const searchBtn = document.getElementById("search-btn");
 const searchResultEl = document.getElementById("search-result");
 const submitBtn = document.getElementById("submit-btn");
@@ -313,11 +315,11 @@ downloadPostBtn.addEventListener("click", async () => {
   }
 });
 
-excludeTagsToggle.addEventListener("click", (event) => {
+moreOptionsToggle.addEventListener("click", (event) => {
   event.preventDefault();
-  const showing = !excludeTagsInput.hidden;
-  excludeTagsInput.hidden = showing;
-  excludeTagsToggle.textContent = showing ? "+ Exclude tags" : "- Exclude tags";
+  const showing = !moreOptions.hidden;
+  moreOptions.hidden = showing;
+  moreOptionsToggle.textContent = showing ? "+ More options" : "- More options";
   if (!showing) excludeTagsInput.focus();
 });
 
@@ -403,7 +405,7 @@ searchBtn.addEventListener("click", async () => {
  * "error" instead of throwing, so callers (the Download button, the queue
  * runner) don't need their own try/catch around it.
  */
-async function runJob(tags, { excludeTags, includeImages, includeVideos, includeJson }) {
+async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVideos, includeJson }) {
   const queryTags = combineTags(tags, excludeTags || "");
   previewEl.innerHTML = "";
   failuresEl.innerHTML = "";
@@ -424,6 +426,8 @@ async function runJob(tags, { excludeTags, includeImages, includeVideos, include
 
   let jobFolder = "";
   let itemCount = 0;
+  let newItemsThisRun = 0;
+  let batchLimitReached = false;
 
   try {
     const slug = slugifyTags(tags);
@@ -458,6 +462,7 @@ async function runJob(tags, { excludeTags, includeImages, includeVideos, include
       onRecord: async (record) => {
         allRecords.push(record);
         itemCount = allRecords.length;
+        newItemsThisRun++;
         if (previewRecords.length < 60) {
           previewRecords.push(record);
           renderPreview(previewRecords);
@@ -497,6 +502,11 @@ async function runJob(tags, { excludeTags, includeImages, includeVideos, include
         } else {
           statusEl.textContent = `Fetching "${tags}", ${itemCount} items collected...`;
         }
+
+        if (batchLimit && newItemsThisRun >= batchLimit) {
+          batchLimitReached = true;
+          currentAbortController.abort();
+        }
       },
     });
 
@@ -510,6 +520,10 @@ async function runJob(tags, { excludeTags, includeImages, includeVideos, include
     return "done";
   } catch (err) {
     if (err.name === "AbortError") {
+      if (batchLimitReached) {
+        statusEl.textContent = `Stopped after ${newItemsThisRun} new item(s) (batch limit reached). Run again to continue.`;
+        return "partial";
+      }
       statusEl.textContent = `Cancelled. ${itemCount} item(s) saved to ${jobFolder}`;
       return "cancelled";
     }
@@ -531,6 +545,7 @@ jobForm.addEventListener("submit", async (event) => {
   if (!tags) return;
   await runJob(tags, {
     excludeTags: excludeTagsInput.value.trim(),
+    batchLimit: batchLimitInput.value ? Number(batchLimitInput.value) : null,
     includeImages: document.getElementById("includeImages").checked,
     includeVideos: document.getElementById("includeVideos").checked,
     includeJson: document.getElementById("includeJson").checked,
@@ -590,6 +605,7 @@ queueAddBtn.addEventListener("click", async () => {
 
   const options = {
     excludeTags,
+    batchLimit: batchLimitInput.value ? Number(batchLimitInput.value) : null,
     includeImages: document.getElementById("includeImages").checked,
     includeVideos: document.getElementById("includeVideos").checked,
     includeJson: document.getElementById("includeJson").checked,
@@ -608,6 +624,7 @@ queueAddBtn.addEventListener("click", async () => {
   await saveQueue();
   tagsInput.value = "";
   excludeTagsInput.value = "";
+  batchLimitInput.value = "";
   tagsInput.focus();
 
   queueAddBtn.disabled = false;
