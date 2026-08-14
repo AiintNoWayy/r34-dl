@@ -1,6 +1,6 @@
 import { Store } from "@tauri-apps/plugin-store";
 import { open } from "@tauri-apps/plugin-dialog";
-import { mkdir, writeFile, writeTextFile, readTextFile, exists, copyFile } from "@tauri-apps/plugin-fs";
+import { mkdir, writeFile, writeTextFile, readTextFile, exists, copyFile, readDir } from "@tauri-apps/plugin-fs";
 import { join, downloadDir } from "@tauri-apps/api/path";
 import {
   slugifyTags,
@@ -49,6 +49,8 @@ const progressTrack = document.getElementById("progress-track");
 const progressFill = document.getElementById("progress-fill");
 const folderLabel = document.getElementById("folder-label");
 const changeFolderBtn = document.getElementById("change-folder");
+const scanBtn = document.getElementById("scan-btn");
+const scanResultEl = document.getElementById("scan-result");
 const editKeyLink = document.getElementById("edit-key");
 
 let downloadRoot = null;
@@ -102,6 +104,56 @@ async function fetchOrCopy(id, url, filePath, signal) {
   await writeFile(filePath, await downloadBinary(url, signal));
   globalIndex.set(key, filePath);
   await saveGlobalIndex();
+}
+
+/**
+ * Rebuilds the global index from whatever's actually on disk under
+ * `downloadRoot`: every subfolder's `_data.json` plus loose files saved by
+ * "Download this image". Lets dedup catch files downloaded before the index
+ * existed, or after the whole folder was moved somewhere else.
+ */
+async function scanDownloadRoot() {
+  const entries = await readDir(downloadRoot);
+  let foldersScanned = 0;
+  let newlyIndexed = 0;
+
+  for (const entry of entries) {
+    if (!entry.isDirectory) {
+      const match = entry.name.match(/^(\d+)\.[a-zA-Z0-9]+$/);
+      if (match && !globalIndex.has(match[1])) {
+        globalIndex.set(match[1], await join(downloadRoot, entry.name));
+        newlyIndexed++;
+      }
+      continue;
+    }
+
+    foldersScanned++;
+    const folderPath = await join(downloadRoot, entry.name);
+    const jsonPath = await join(folderPath, `${entry.name}_data.json`);
+    if (!(await exists(jsonPath))) continue;
+
+    let records;
+    try {
+      records = JSON.parse(await readTextFile(jsonPath));
+    } catch {
+      continue;
+    }
+
+    for (const record of records) {
+      const key = String(record.id);
+      if (globalIndex.has(key)) continue;
+      const extension = fileExtensionOf(record.src);
+      const subdir = record.type === "video" ? "videos" : "images";
+      const filePath = await join(folderPath, subdir, `${record.id}.${extension}`);
+      if (await exists(filePath)) {
+        globalIndex.set(key, filePath);
+        newlyIndexed++;
+      }
+    }
+  }
+
+  await saveGlobalIndex();
+  return { foldersScanned, newlyIndexed };
 }
 
 async function saveQueue() {
@@ -277,6 +329,25 @@ changeFolderBtn.addEventListener("click", async () => {
   await store.set("downloadRoot", downloadRoot);
   await store.save();
   await loadGlobalIndex();
+  scanResultEl.textContent = "";
+});
+
+scanBtn.addEventListener("click", async () => {
+  scanBtn.disabled = true;
+  scanBtn.textContent = "Scanning...";
+  scanResultEl.classList.remove("error");
+  scanResultEl.textContent = "";
+
+  try {
+    const { foldersScanned, newlyIndexed } = await scanDownloadRoot();
+    scanResultEl.textContent = `Scanned ${foldersScanned} folder(s), indexed ${newlyIndexed} previously-downloaded item(s).`;
+  } catch (err) {
+    scanResultEl.classList.add("error");
+    scanResultEl.textContent = `Scan failed: ${errorMessage(err)}`;
+  } finally {
+    scanBtn.disabled = false;
+    scanBtn.textContent = "Scan folder";
+  }
 });
 
 function errorMessage(err) {

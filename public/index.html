@@ -64,6 +64,8 @@
   .job-actions { display: flex; gap: 0.75rem; }
   .job-actions button:not(#cancel-btn) { flex: 1; }
   #search-result { font-size: 0.9rem; color: var(--muted); min-height: 1.2em; }
+  #scan-result { font-size: 0.85rem; color: var(--muted); min-height: 1.2em; }
+  #scan-result.error { color: var(--danger); }
   #search-result.error { color: var(--danger); }
   #queue-section { margin-top: 1rem; }
   .queue-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--muted); }
@@ -186,8 +188,10 @@
       </div>
       <div class="folder-row">
         <span id="folder-label"></span>
+        <button type="button" class="secondary" id="scan-btn">Scan folder</button>
         <button type="button" class="secondary" id="change-folder">Change folder</button>
       </div>
+      <div id="scan-result"></div>
       <div class="job-actions">
         <button type="button" class="secondary" id="search-btn">Search</button>
         <button type="button" class="secondary" id="queue-add-btn">Add to queue</button>
