@@ -20,6 +20,8 @@
     { "identifier": "fs:allow-read-text-file", "allow": [{ "path": "**" }] },
     { "identifier": "fs:allow-exists", "allow": [{ "path": "**" }] },
     { "identifier": "fs:allow-copy-file", "allow": [{ "path": "**" }] },
-    { "identifier": "fs:allow-read-dir", "allow": [{ "path": "**" }] }
+    { "identifier": "fs:allow-read-dir", "allow": [{ "path": "**" }] },
+    "updater:default",
+    "process:default"
   ]
 }

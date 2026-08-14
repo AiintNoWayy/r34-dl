@@ -2,6 +2,8 @@ import { Store } from "@tauri-apps/plugin-store";
 import { open } from "@tauri-apps/plugin-dialog";
 import { mkdir, writeFile, writeTextFile, readTextFile, exists, copyFile, readDir } from "@tauri-apps/plugin-fs";
 import { join, downloadDir } from "@tauri-apps/api/path";
+import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
   slugifyTags,
   combineTags,
@@ -55,6 +57,9 @@ const changeFolderBtn = document.getElementById("change-folder");
 const scanBtn = document.getElementById("scan-btn");
 const scanResultEl = document.getElementById("scan-result");
 const editKeyLink = document.getElementById("edit-key");
+const updateBanner = document.getElementById("update-banner");
+const updateMessage = document.getElementById("update-message");
+const updateBtn = document.getElementById("update-btn");
 
 let downloadRoot = null;
 let currentAbortController = null;
@@ -192,6 +197,34 @@ if (credentials?.userId && credentials?.apiKey) {
 } else {
   showSetupView();
 }
+
+async function checkForAppUpdate() {
+  try {
+    const update = await checkForUpdate();
+    if (!update?.available) return;
+
+    updateMessage.textContent = `A new version (${update.version}) is available.`;
+    updateBanner.hidden = false;
+
+    updateBtn.addEventListener("click", async () => {
+      updateBtn.disabled = true;
+      updateBtn.textContent = "Updating...";
+      updateMessage.textContent = `Downloading v${update.version}...`;
+      try {
+        await update.downloadAndInstall();
+        await relaunch();
+      } catch (err) {
+        updateBtn.disabled = false;
+        updateBtn.textContent = "Update now";
+        updateMessage.textContent = `Update failed: ${errorMessage(err)}`;
+      }
+    });
+  } catch (err) {
+    console.error("Update check failed:", err);
+  }
+}
+
+checkForAppUpdate();
 
 setupForm.addEventListener("submit", async (event) => {
   event.preventDefault();

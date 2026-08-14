@@ -168,6 +168,19 @@
   }
   footer { margin-top: 1rem; font-size: 0.8rem; color: var(--muted); }
   footer a { color: var(--accent); }
+  #update-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    background: var(--panel);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+  }
+  #update-banner button { padding: 0.4rem 0.9rem; font-size: 0.85rem; white-space: nowrap; }
   #moreOptionsToggle { align-self: flex-start; color: var(--accent); font-size: 0.85rem; text-decoration: none; }
   #moreOptionsToggle:hover { text-decoration: underline; }
   #moreOptions { gap: 0.75rem; }
@@ -186,6 +199,11 @@
 <main>
   <h1>r34-dl</h1>
   <p class="subtitle">Fetch images, videos, and metadata by tag from rule34.xxx's public API.</p>
+
+  <div id="update-banner" hidden>
+    <span id="update-message"></span>
+    <button type="button" id="update-btn">Update now</button>
+  </div>
 
   <section id="setup-view" hidden>
     <form id="setup-form">

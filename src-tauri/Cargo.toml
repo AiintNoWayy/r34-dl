@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.3.0"
+version = "0.4.0"
 description = "Fetch images, videos, and metadata by tag from rule34.xxx's public API"
 authors = ["AiintNoWayy"]
 license = "MIT"
@@ -27,3 +27,5 @@ tauri-plugin-http = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
