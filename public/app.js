@@ -33,6 +33,7 @@ const uploaderResultEl = document.getElementById("uploader-result");
 const jobForm = document.getElementById("job-form");
 const tagsInput = document.getElementById("tags");
 const excludeTagsInput = document.getElementById("excludeTags");
+const excludeTagsToggle = document.getElementById("excludeTagsToggle");
 const searchBtn = document.getElementById("search-btn");
 const searchResultEl = document.getElementById("search-result");
 const submitBtn = document.getElementById("submit-btn");
@@ -258,6 +259,14 @@ downloadPostBtn.addEventListener("click", async () => {
     downloadPostBtn.disabled = false;
     downloadPostBtn.textContent = "Download this image";
   }
+});
+
+excludeTagsToggle.addEventListener("click", (event) => {
+  event.preventDefault();
+  const showing = !excludeTagsInput.hidden;
+  excludeTagsInput.hidden = showing;
+  excludeTagsToggle.textContent = showing ? "+ Exclude tags" : "- Exclude tags";
+  if (!showing) excludeTagsInput.focus();
 });
 
 changeFolderBtn.addEventListener("click", async () => {

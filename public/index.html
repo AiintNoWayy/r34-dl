@@ -139,6 +139,8 @@
   }
   footer { margin-top: 1rem; font-size: 0.8rem; color: var(--muted); }
   footer a { color: var(--accent); }
+  #excludeTagsToggle { align-self: flex-start; color: var(--accent); font-size: 0.85rem; text-decoration: none; }
+  #excludeTagsToggle:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -175,7 +177,8 @@
 
     <form id="job-form">
       <input type="text" id="tags" placeholder="Search tags" autocomplete="off" required />
-      <input type="text" id="excludeTags" placeholder="Exclude tags (optional)" autocomplete="off" />
+      <a href="#" id="excludeTagsToggle">+ Exclude tags</a>
+      <input type="text" id="excludeTags" placeholder="Exclude tags (space-separated)" autocomplete="off" hidden />
       <div class="options">
         <label><input type="checkbox" id="includeImages" checked /> Images</label>
         <label><input type="checkbox" id="includeVideos" checked /> Videos</label>

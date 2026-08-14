@@ -1,6 +1,6 @@
 {
   "name": "r34-dl",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Desktop app to fetch images, videos, and metadata by tag from rule34.xxx's public API",
   "type": "module",
   "scripts": {

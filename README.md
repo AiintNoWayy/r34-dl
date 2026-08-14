@@ -8,8 +8,12 @@ A small desktop app that fetches images, videos, and metadata from rule34.xxx by
 
 - Paste your API credentials once, then just type a tag and download
 - Search first to see the result count and a preview before committing to a full download
+- Exclude tags from a search without learning the site's `-tag` syntax
 - Find who posted a specific image (no artist tag needed) and jump straight to everything else they've posted
+- Download a single image directly from its post link, no tag search needed
+- Queue up several searches to run one after another unattended, with each item's status and item count shown live; the queue survives closing and reopening the app
 - Cancel a search or download at any time
+- The same post found under two different searches (a tag and its uploader, for example) is copied locally instead of downloaded twice
 - Native folder picker to choose where downloads go
 - Downloads images and/or videos, with metadata saved to JSON
 - Automatically paginates through all results for a tag
@@ -63,14 +67,15 @@ The app will ask for your API credentials the first time it opens:
 
 ## Usage
 
-Type your search tags, pick what to grab (images / videos / JSON), optionally change the download folder, then either:
+Type your search tags (and optionally tags to exclude), pick what to grab (images / videos / JSON), optionally change the download folder, then either:
 
 - Hit **Search** to see the result count and a preview first, or
-- Hit **Download** to go straight to fetching everything.
+- Hit **Download** to go straight to fetching everything, or
+- Hit **Add to queue** to stack up several searches and run them later with **Start queue**.
 
-Progress, ETA, and a thumbnail preview update live as items come in. Hit **Cancel** at any time to stop. Re-running the same tag later only fetches what's new.
+Progress, ETA, and a thumbnail preview update live as items come in. Hit **Cancel** at any time to stop. Re-running the same tag later only fetches what's new, and a post that turns up again under a different search is copied from its first download instead of being fetched again.
 
-No artist tag on an image? Paste its post link or ID into the "Find who posted it" field to look up the uploader, then use the "Use as search" button to fetch everything else they've posted (searches `user:<name>` under the hood).
+No artist tag on an image? Paste its post link or ID into the "Find who posted it" field to look up the uploader, then either use the "Use as search" button to fetch everything else they've posted (searches `user:<name>` under the hood), or hit **Download this image** to grab just that one file.
 
 ## Disclaimer
 
