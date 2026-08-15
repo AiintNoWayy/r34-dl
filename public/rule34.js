@@ -203,9 +203,16 @@ function sleep(ms, signal) {
 /**
  * Walks every results page for `tags` and invokes `onRecord` for each new post.
  * Stops when a page returns fewer than RESULTS_PER_PAGE results, or when `signal` aborts.
+ *
+ * `startPage`, when given, skips straight to around where a previous run left
+ * off instead of re-walking every already-downloaded page from the start:
+ * results come back newest-first, so posts already on disk are always the
+ * earliest pages. `alreadySeenIds` still guards every post actually fetched,
+ * so a wrong guess (new posts shifted things, or the caller passed 0) only
+ * costs re-checking a few pages, never skips real content.
  */
-export async function collectAllResults({ tags, credentials, alreadySeenIds, onRecord, onPageComplete, onRateLimited, signal }) {
-  let pageIndex = 0;
+export async function collectAllResults({ tags, credentials, alreadySeenIds, onRecord, onPageComplete, onRateLimited, signal, startPage = 0 }) {
+  let pageIndex = startPage;
 
   while (true) {
     let posts;
