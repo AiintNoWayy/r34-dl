@@ -2,8 +2,10 @@ import { Store } from "@tauri-apps/plugin-store";
 import { open } from "@tauri-apps/plugin-dialog";
 import { mkdir, writeFile, writeTextFile, readTextFile, exists, copyFile, readDir } from "@tauri-apps/plugin-fs";
 import { join, downloadDir } from "@tauri-apps/api/path";
+import { getVersion } from "@tauri-apps/api/app";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { openPath } from "@tauri-apps/plugin-opener";
 import {
   slugifyTags,
   combineTags,
@@ -47,6 +49,8 @@ const queueAddBtn = document.getElementById("queue-add-btn");
 const queueSection = document.getElementById("queue-section");
 const queueList = document.getElementById("queue-list");
 const queueStartBtn = document.getElementById("queue-start-btn");
+const queuePauseBtn = document.getElementById("queue-pause-btn");
+const queueClearBtn = document.getElementById("queue-clear-btn");
 const statusEl = document.getElementById("status");
 const previewEl = document.getElementById("preview");
 const failuresEl = document.getElementById("failures");
@@ -54,18 +58,21 @@ const progressTrack = document.getElementById("progress-track");
 const progressFill = document.getElementById("progress-fill");
 const folderLabel = document.getElementById("folder-label");
 const changeFolderBtn = document.getElementById("change-folder");
+const openFolderBtn = document.getElementById("open-folder-btn");
 const scanBtn = document.getElementById("scan-btn");
 const scanResultEl = document.getElementById("scan-result");
 const editKeyLink = document.getElementById("edit-key");
 const updateBanner = document.getElementById("update-banner");
 const updateMessage = document.getElementById("update-message");
 const updateBtn = document.getElementById("update-btn");
+const appVersionEl = document.getElementById("app-version");
 
 let downloadRoot = null;
 let currentAbortController = null;
 let queue = [];
 let queueIdCounter = 0;
 let queueRunning = false;
+let queuePaused = false;
 let globalIndex = new Map();
 let globalIndexPath = null;
 
@@ -237,6 +244,9 @@ async function checkForAppUpdate() {
 }
 
 checkForAppUpdate();
+getVersion().then((version) => {
+  appVersionEl.textContent = `v${version}`;
+});
 
 setupForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -369,6 +379,15 @@ moreOptionsToggle.addEventListener("click", (event) => {
   if (!showing) excludeTagsInput.focus();
 });
 
+openFolderBtn.addEventListener("click", async () => {
+  try {
+    await openPath(downloadRoot);
+  } catch (err) {
+    scanResultEl.classList.add("error");
+    scanResultEl.textContent = `Couldn't open folder: ${errorMessage(err)}`;
+  }
+});
+
 changeFolderBtn.addEventListener("click", async () => {
   const picked = await open({ directory: true, multiple: false, title: "Choose download folder" });
   if (!picked) return;
@@ -460,7 +479,7 @@ searchBtn.addEventListener("click", async () => {
  * "error" instead of throwing, so callers (the Download button, the queue
  * runner) don't need their own try/catch around it.
  */
-async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVideos, includeJson }) {
+async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVideos, includeJson }, onProgress, absoluteTarget) {
   const queryTags = combineTags(tags, excludeTags || "");
   previewEl.innerHTML = "";
   failuresEl.innerHTML = "";
@@ -495,15 +514,26 @@ async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVid
     const allRecords = [...existingRecords];
     const startCount = existingRecords.length;
     itemCount = startCount;
+    // Results come back newest-first, so whatever's already on disk lines up
+    // with the earliest pages: jump close to where we left off instead of
+    // re-walking every already-downloaded page one by one. A 2-page margin
+    // covers any new posts that landed since the last run.
+    const startPage = Math.max(0, Math.floor(startCount / RESULTS_PER_PAGE) - 2);
+    if (startCount > 0) {
+      statusEl.textContent = `Starting... (${startCount} item(s) already downloaded, resuming...)`;
+    }
     const previewRecords = [];
     const failures = [];
 
     const totalCount = await fetchResultCount(queryTags, { userId, apiKey }, signal).catch(() => null);
     const totalPages = totalCount ? Math.ceil(totalCount / RESULTS_PER_PAGE) : null;
-    // The target for this run's progress bar/ETA: capped at the batch limit
-    // (from where we're starting), not the full result count, so a batched
-    // run doesn't show an ETA for work it isn't going to do right now.
-    const target = batchLimit ? Math.min(totalCount ?? Infinity, startCount + batchLimit) : totalCount;
+    // The target for this run's progress bar/ETA, and where a batched run
+    // stops. `absoluteTarget` (a queue entry's fixed plan boundary from
+    // buildBatchPlan) takes priority so a batch stops at the same line every
+    // time regardless of how many times this run got interrupted and
+    // restarted; without one (a plain one-off Download), it's relative to
+    // wherever this run is starting from, same as before.
+    const target = absoluteTarget ?? (batchLimit ? Math.min(totalCount ?? Infinity, startCount + batchLimit) : totalCount);
     const jobStart = Date.now();
 
     if (target) {
@@ -515,6 +545,7 @@ async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVid
       tags: queryTags,
       credentials: { userId, apiKey },
       alreadySeenIds: seenIds,
+      startPage,
       signal,
       onRateLimited: () => {
         statusEl.textContent = `Rate limited by rule34.xxx, retrying in 5s... (${itemCount} items so far)`;
@@ -523,6 +554,7 @@ async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVid
         allRecords.push(record);
         itemCount = allRecords.length;
         newItemsThisRun++;
+        onProgress?.(itemCount);
         if (previewRecords.length < 60) {
           previewRecords.push(record);
           renderPreview(previewRecords);
@@ -564,7 +596,7 @@ async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVid
           statusEl.textContent = `Fetching "${tags}", ${itemCount} items collected...`;
         }
 
-        if (batchLimit && newItemsThisRun >= batchLimit) {
+        if (batchLimit && target != null && itemCount >= target) {
           batchLimitReached = true;
           currentAbortController.abort();
         }
@@ -604,26 +636,84 @@ jobForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const tags = tagsInput.value.trim();
   if (!tags) return;
-  await runJob(tags, {
+
+  const options = {
     excludeTags: getEffectiveExcludeTags(),
     batchLimit: batchLimitInput.value ? Number(batchLimitInput.value) : null,
     includeImages: document.getElementById("includeImages").checked,
     includeVideos: document.getElementById("includeVideos").checked,
     includeJson: document.getElementById("includeJson").checked,
-  });
+  };
+
+  if (options.batchLimit) {
+    // A batched download goes through the queue instead of running on its
+    // own: that's what makes the full plan (already done, current, still to
+    // come) show up somewhere, and what a plain one-off run never left
+    // behind before.
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Queuing...";
+    queue.push(...(await buildBatchPlan(tags, options)));
+    renderQueue();
+    await saveQueue();
+    tagsInput.value = "";
+    excludeTagsInput.value = "";
+    batchLimitInput.value = "";
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Download";
+    await runQueueLoop();
+    return;
+  }
+
+  await runJob(tags, options);
 });
 
 cancelBtn.addEventListener("click", () => {
   currentAbortController?.abort();
 });
 
+/**
+ * Always describes a batch entry with numbers local to that batch (e.g.
+ * "6684/10000 items"), never the whole search's total, so the count next to
+ * a batch always matches the size the user actually set as the batch limit.
+ * Pending entries carry a startCount/target snapshot from when they were
+ * added (see buildBatchPlan), so even a batch that hasn't run yet can show
+ * how much of it is already covered by existing downloads.
+ */
+function formatBatchCount(item) {
+  if (item.target != null && item.startCount != null) {
+    const batchSize = item.target - item.startCount;
+    // Not capped at batchSize: the plan's boundaries are a snapshot, and the
+    // messy pre-batching history in an existing folder rarely lines up with
+    // clean multiples of the batch limit, so a running batch can genuinely
+    // pass its planned size by a bit. Capping it would show "10000/10000"
+    // (reads as finished) while the row still says "running" underneath.
+    const progress = Math.max(0, (item.liveCount ?? item.startCount) - item.startCount);
+    return `${progress}/${batchSize} items`;
+  }
+
+  const batchLimit = item.options?.batchLimit;
+  if (item.status === "pending" && batchLimit) return `up to ${batchLimit} items`;
+  return item.totalCount != null ? `${item.totalCount} items` : "? items";
+}
+
+function updateQueueRowCount(item) {
+  const span = document.getElementById(`queue-count-${item.id}`);
+  if (span) span.textContent = formatBatchCount(item);
+}
+
 function renderQueue() {
   queueSection.hidden = queue.length === 0;
   queueList.innerHTML = "";
 
+  // The item Start queue will pick up next: highlighted so it reads as
+  // "we're resuming here," distinct from batches already fully covered
+  // (grayed via the "done" class) and ones still further out.
+  const nextPendingId = queue.find((q) => q.status === "pending")?.id;
+
   for (const item of queue) {
     const li = document.createElement("li");
-    li.className = item.status;
+    li.id = `queue-row-${item.id}`;
+    li.className = item.status + (item.id === nextPendingId ? " next-up" : "");
 
     const tagSpan = document.createElement("span");
     tagSpan.className = "queue-tag";
@@ -631,18 +721,18 @@ function renderQueue() {
 
     const countSpan = document.createElement("span");
     countSpan.className = "queue-count";
-    countSpan.textContent =
-      item.target != null
-        ? `${item.startCount ?? 0}/${item.target} items`
-        : item.totalCount != null
-          ? `${item.totalCount} items`
-          : "? items";
+    countSpan.id = `queue-count-${item.id}`;
+    countSpan.textContent = formatBatchCount(item);
 
     const statusSpan = document.createElement("span");
     statusSpan.className = "queue-status";
     statusSpan.textContent = item.status;
 
-    li.append(tagSpan, countSpan, statusSpan);
+    // A fixed-width slot for whichever buttons this row gets, so rows with
+    // fewer buttons (e.g. "running", with none) don't let the count/status
+    // columns before them drift out of alignment with rows that have more.
+    const actions = document.createElement("span");
+    actions.className = "queue-actions";
 
     if (item.status === "pending") {
       const index = queue.indexOf(item);
@@ -661,6 +751,23 @@ function renderQueue() {
       downBtn.disabled = index === queue.length - 1;
       downBtn.addEventListener("click", () => moveQueueItem(item.id, 1));
 
+      actions.append(upBtn, downBtn);
+    }
+
+    if (item.status === "partial" || item.status === "cancelled" || item.status === "error") {
+      const resumeBtn = document.createElement("button");
+      resumeBtn.type = "button";
+      resumeBtn.className = "secondary";
+      resumeBtn.textContent = "Resume";
+      resumeBtn.addEventListener("click", () => {
+        item.status = "pending";
+        renderQueue();
+        saveQueue();
+      });
+      actions.append(resumeBtn);
+    }
+
+    if (item.status !== "running") {
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "secondary";
@@ -670,9 +777,10 @@ function renderQueue() {
         renderQueue();
         saveQueue();
       });
-      li.append(upBtn, downBtn, removeBtn);
+      actions.append(removeBtn);
     }
 
+    li.append(tagSpan, countSpan, statusSpan, actions);
     queueList.appendChild(li);
   }
 }
@@ -686,38 +794,115 @@ function moveQueueItem(id, direction) {
   saveQueue();
 }
 
+/**
+ * Builds the queue entries a search would produce right now: one per batch
+ * (or a single entry with no batch limit), each carrying its own startCount/
+ * target computed from what's actually on disk for `tags` at this moment.
+ * A batch already fully covered by existing downloads is marked "done"
+ * immediately, so the queue always shows the whole plan up front, not just
+ * whatever's left to do.
+ */
+async function buildBatchPlan(tags, options) {
+  let totalCount = null;
+  try {
+    const credentials = await store.get("credentials");
+    totalCount = await fetchResultCount(combineTags(tags, options.excludeTags), credentials);
+  } catch {
+    totalCount = null;
+  }
+  const existingCount = await getExistingCount(tags);
+
+  const { batchLimit } = options;
+  const runs = batchLimit && totalCount ? Math.ceil(totalCount / batchLimit) : 1;
+  const entries = [];
+  for (let i = 0; i < runs; i++) {
+    const label = runs > 1 ? `${tags} (batch ${i + 1}/${runs})` : tags;
+    const batchStart = batchLimit ? i * batchLimit : 0;
+    const batchEnd = batchLimit ? Math.min(totalCount ?? Infinity, (i + 1) * batchLimit) : totalCount;
+    const alreadyCovered = batchEnd != null && existingCount >= batchEnd;
+    entries.push({
+      id: queueIdCounter++,
+      tags,
+      label,
+      options,
+      totalCount,
+      startCount: batchStart,
+      target: batchEnd,
+      liveCount: batchEnd != null ? Math.min(existingCount, batchEnd) : existingCount,
+      status: alreadyCovered ? "done" : "pending",
+    });
+  }
+  return entries;
+}
+
+async function runQueueLoop() {
+  if (queueRunning) return;
+  queueRunning = true;
+  queuePaused = false;
+  queueStartBtn.disabled = true;
+  queueStartBtn.textContent = "Running...";
+  queuePauseBtn.hidden = false;
+  queuePauseBtn.disabled = false;
+  queuePauseBtn.textContent = "Pause queue";
+
+  for (const item of queue) {
+    if (item.status !== "pending") continue;
+    item.status = "running";
+    renderQueue();
+    await saveQueue();
+
+    // item.startCount/target stay exactly as buildBatchPlan set them: the
+    // stable, batch-relative range shown while this entry was still
+    // pending. runJob figures out its own real starting point from the
+    // folder itself (it doesn't need ours), so there's nothing to
+    // recompute here, only item.liveCount to keep moving as records land,
+    // continuing from the same numbers the pending preview already showed
+    // instead of resetting to a fresh 0 for this run. item.target is also
+    // passed through as the actual stopping point, so this batch always
+    // stops at the same absolute line no matter how many times it's been
+    // interrupted and resumed, instead of allowing another full batchLimit
+    // each time it restarts.
+    const { outcome, itemCount } = await runJob(
+      item.tags,
+      item.options,
+      (liveCount) => {
+        item.liveCount = liveCount;
+        updateQueueRowCount(item);
+      },
+      item.target,
+    );
+
+    item.liveCount = itemCount;
+    item.status = queuePaused && outcome !== "done" ? "pending" : outcome;
+    renderQueue();
+    await saveQueue();
+
+    if (queuePaused || outcome === "cancelled") break;
+  }
+
+  queueRunning = false;
+  queuePaused = false;
+  queueStartBtn.disabled = false;
+  queueStartBtn.textContent = "Start queue";
+  queuePauseBtn.hidden = true;
+}
+
 queueAddBtn.addEventListener("click", async () => {
   const tags = tagsInput.value.trim();
   if (!tags) return;
-  const excludeTags = getEffectiveExcludeTags();
 
   queueAddBtn.disabled = true;
   queueAddBtn.textContent = "Adding...";
 
   const options = {
-    excludeTags,
+    excludeTags: getEffectiveExcludeTags(),
     batchLimit: batchLimitInput.value ? Number(batchLimitInput.value) : null,
     includeImages: document.getElementById("includeImages").checked,
     includeVideos: document.getElementById("includeVideos").checked,
     includeJson: document.getElementById("includeJson").checked,
   };
 
-  let totalCount = null;
-  try {
-    const credentials = await store.get("credentials");
-    totalCount = await fetchResultCount(combineTags(tags, excludeTags), credentials);
-  } catch {
-    totalCount = null;
-  }
-  const startCount = await getExistingCount(tags);
-
-  const { batchLimit } = options;
-  const runs = batchLimit && totalCount ? Math.ceil(totalCount / batchLimit) : 1;
-  for (let i = 0; i < runs; i++) {
-    const label = runs > 1 ? `${tags} (batch ${i + 1}/${runs})` : tags;
-    const target = batchLimit ? Math.min(totalCount ?? Infinity, startCount + batchLimit * (i + 1)) : totalCount;
-    queue.push({ id: queueIdCounter++, tags, label, options, totalCount, startCount, target, status: "pending" });
-  }
+  queue.push(...(await buildBatchPlan(tags, options)));
   renderQueue();
   await saveQueue();
   tagsInput.value = "";
@@ -729,39 +914,20 @@ queueAddBtn.addEventListener("click", async () => {
   queueAddBtn.textContent = "Add to queue";
 });
 
-queueStartBtn.addEventListener("click", async () => {
-  if (queueRunning) return;
-  queueRunning = true;
-  queueStartBtn.disabled = true;
-  queueStartBtn.textContent = "Running...";
-
-  for (const item of queue) {
-    if (item.status !== "pending") continue;
-    item.status = "running";
-    renderQueue();
-    await saveQueue();
-
-    const { outcome, itemCount } = await runJob(item.tags, item.options);
-    item.status = outcome;
-    item.startCount = itemCount;
-    // Sibling batches of the same search haven't run yet, but the items
-    // this run just saved are already on disk, so their own starting
-    // point has effectively moved forward too.
-    for (const sibling of queue) {
-      if (sibling !== item && sibling.tags === item.tags && sibling.status === "pending") {
-        sibling.startCount = itemCount;
-      }
-    }
-    renderQueue();
-    await saveQueue();
-
-    if (outcome === "cancelled") break;
-  }
-
-  queueRunning = false;
-  queueStartBtn.disabled = false;
-  queueStartBtn.textContent = "Start queue";
+queuePauseBtn.addEventListener("click", () => {
+  queuePaused = true;
+  queuePauseBtn.disabled = true;
+  queuePauseBtn.textContent = "Pausing...";
+  currentAbortController?.abort();
 });
+
+queueClearBtn.addEventListener("click", () => {
+  queue = queue.filter((item) => item.status !== "done");
+  renderQueue();
+  saveQueue();
+});
+
+queueStartBtn.addEventListener("click", runQueueLoop);
 
 function renderPreview(records) {
   previewEl.innerHTML = "";
