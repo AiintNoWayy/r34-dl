@@ -123,9 +123,12 @@ async function fetchOrCopy(id, url, filePath, signal) {
 
 /**
  * Rebuilds the global index from whatever's actually on disk under
- * `downloadRoot`: every subfolder's `_data.json` plus loose files saved by
+ * `downloadRoot`: every subfolder's `images`/`videos` files (named by post
+ * id, so no metadata is needed to identify them) plus loose files saved by
  * "Download this image". Lets dedup catch files downloaded before the index
- * existed, or after the whole folder was moved somewhere else.
+ * existed, after the whole folder was moved somewhere else, or after the
+ * per-tag metadata JSON was deleted (it's optional; the files on disk are
+ * always the source of truth).
  */
 async function scanDownloadRoot() {
   const entries = await readDir(downloadRoot);
@@ -144,24 +147,16 @@ async function scanDownloadRoot() {
 
     foldersScanned++;
     const folderPath = await join(downloadRoot, entry.name);
-    const jsonPath = await join(folderPath, `${entry.name}_data.json`);
-    if (!(await exists(jsonPath))) continue;
 
-    let records;
-    try {
-      records = JSON.parse(await readTextFile(jsonPath));
-    } catch {
-      continue;
-    }
+    for (const subdir of ["images", "videos"]) {
+      const subdirPath = await join(folderPath, subdir);
+      if (!(await exists(subdirPath))) continue;
 
-    for (const record of records) {
-      const key = String(record.id);
-      if (globalIndex.has(key)) continue;
-      const extension = fileExtensionOf(record.src);
-      const subdir = record.type === "video" ? "videos" : "images";
-      const filePath = await join(folderPath, subdir, `${record.id}.${extension}`);
-      if (await exists(filePath)) {
-        globalIndex.set(key, filePath);
+      for (const file of await readDir(subdirPath)) {
+        if (file.isDirectory) continue;
+        const match = file.name.match(/^(\d+)\.[a-zA-Z0-9]+$/);
+        if (!match || globalIndex.has(match[1])) continue;
+        globalIndex.set(match[1], await join(subdirPath, file.name));
         newlyIndexed++;
       }
     }
@@ -171,13 +166,35 @@ async function scanDownloadRoot() {
   return { foldersScanned, newlyIndexed };
 }
 
+/**
+ * How many items are already down for `tags`: the metadata JSON's record
+ * count when it exists, otherwise a direct count of files in that folder's
+ * images/videos subfolders, so this stays accurate even without the
+ * (optional) JSON.
+ */
 async function getExistingCount(tags) {
   try {
     const slug = slugifyTags(tags);
-    const jsonPath = await join(downloadRoot, slug, `${slug}_data.json`);
-    if (!(await exists(jsonPath))) return 0;
-    const records = JSON.parse(await readTextFile(jsonPath));
-    return Array.isArray(records) ? records.length : 0;
+    const folderPath = await join(downloadRoot, slug);
+    const jsonPath = await join(folderPath, `${slug}_data.json`);
+
+    let jsonCount = 0;
+    if (await exists(jsonPath)) {
+      const records = JSON.parse(await readTextFile(jsonPath));
+      if (Array.isArray(records)) jsonCount = records.length;
+    }
+
+    let diskCount = 0;
+    for (const subdir of ["images", "videos"]) {
+      const subdirPath = await join(folderPath, subdir);
+      if (!(await exists(subdirPath))) continue;
+      diskCount += (await readDir(subdirPath)).filter((f) => !f.isDirectory).length;
+    }
+
+    // The JSON can under-report (missing entirely, or rewritten from
+    // scratch after being deleted mid-history) but the files on disk never
+    // lie, so never show fewer than what's actually there.
+    return Math.max(jsonCount, diskCount);
   } catch {
     return 0;
   }
@@ -511,8 +528,22 @@ async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVid
     const jsonPath = await join(jobFolder, `${slug}_data.json`);
     const existingRecords = (await exists(jsonPath)) ? JSON.parse(await readTextFile(jsonPath)) : [];
     const seenIds = new Set(existingRecords.map((r) => r.id));
+    // Files on disk are the real source of truth, whether or not the JSON
+    // has a record for them (it might be missing entirely, or just
+    // incomplete because it was deleted and is being rebuilt from scratch).
+    // Without this, a folder without its JSON would look empty and
+    // re-paginate the whole search from page one on every run.
+    for (const subdir of ["images", "videos"]) {
+      const subdirPath = await join(jobFolder, subdir);
+      if (!(await exists(subdirPath))) continue;
+      for (const file of await readDir(subdirPath)) {
+        if (file.isDirectory) continue;
+        const match = file.name.match(/^(\d+)\./);
+        if (match) seenIds.add(Number(match[1]));
+      }
+    }
     const allRecords = [...existingRecords];
-    const startCount = existingRecords.length;
+    const startCount = seenIds.size;
     itemCount = startCount;
     // Results come back newest-first, so whatever's already on disk lines up
     // with the earliest pages: jump close to where we left off instead of
@@ -552,8 +583,11 @@ async function runJob(tags, { excludeTags, batchLimit, includeImages, includeVid
       },
       onRecord: async (record) => {
         allRecords.push(record);
-        itemCount = allRecords.length;
         newItemsThisRun++;
+        // Not allRecords.length: when the JSON was missing or incomplete,
+        // allRecords only holds newly-found records, while startCount
+        // already accounts for what's on disk from before this run.
+        itemCount = startCount + newItemsThisRun;
         onProgress?.(itemCount);
         if (previewRecords.length < 60) {
           previewRecords.push(record);
@@ -655,7 +689,6 @@ jobForm.addEventListener("submit", async (event) => {
     queue.push(...(await buildBatchPlan(tags, options)));
     renderQueue();
     await saveQueue();
-    tagsInput.value = "";
     excludeTagsInput.value = "";
     batchLimitInput.value = "";
     submitBtn.disabled = false;
@@ -905,10 +938,8 @@ queueAddBtn.addEventListener("click", async () => {
   queue.push(...(await buildBatchPlan(tags, options)));
   renderQueue();
   await saveQueue();
-  tagsInput.value = "";
   excludeTagsInput.value = "";
   batchLimitInput.value = "";
-  tagsInput.focus();
 
   queueAddBtn.disabled = false;
   queueAddBtn.textContent = "Add to queue";
